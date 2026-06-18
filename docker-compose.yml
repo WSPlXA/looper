@@ -1,0 +1,27 @@
+services:
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: test
+    image: deepseek-loop-engine:test
+    command: ["npm", "test"]
+
+  migrate:
+    profiles: ["migrate"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: deepseek-loop-engine:runtime
+    environment:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-pro}
+      RUNS_DIR: /app/runs
+      MODEL_TIMEOUT_MS: ${MODEL_TIMEOUT_MS:-120000}
+      JAVAC_TIMEOUT_MS: ${JAVAC_TIMEOUT_MS:-30000}
+    volumes:
+      - ./runs:/app/runs
+      - ./examples/output:/app/examples/output
+    command: ["migrate-one", "examples/cobol/HELLO.cob", "examples/output", "Hello", "5"]

@@ -1,0 +1,14 @@
+.git
+.codex
+.agents
+.env
+node_modules
+dist
+runs/*
+examples/output/*
+npm-debug.log*
+Dockerfile*
+docker-compose*.yml
+README.md
+Implementation_plan.md
+Agent.md
