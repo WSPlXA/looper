@@ -14,7 +14,17 @@ export type GraphNodeName =
   | "classifyError"
   | "repair"
   | "verify"
-  | "report";
+  | "report"
+  // assembly pipeline
+  | "scanSubprograms"
+  | "expandCopybooks"
+  | "extractCallGraph"
+  | "translateSubprograms"
+  | "assembleProgram"
+  | "compileAssembly"
+  | "classifyAssemblyError"
+  | "repairAssembly"
+  | "reportAssembly";
 
 export type GraphNext = GraphNodeName | "END";
 

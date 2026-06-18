@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "migrate": "tsx src/apps/cli/main.ts migrate-one",
-    "migrate-batch": "tsx src/apps/cli/main.ts migrate-batch"
+    "migrate-batch": "tsx src/apps/cli/main.ts migrate-batch",
+    "migrate-program": "tsx src/apps/cli/main.ts migrate-program"
   },
   "engines": { "node": ">=20" },
   "dependencies": {
