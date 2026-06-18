@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { resolve, join, basename } from "node:path";
 import type { ModelClient } from "../core/model/model-client.js";
-import { scanProjectDirectory } from "../skills/batch/scan-project.skill.js";
+import { scanProjectDirectory, type CobolFileEntry } from "../skills/batch/scan-project.skill.js";
 import { buildDependencyGraph } from "../skills/batch/build-dependency-graph.skill.js";
 import { writeAggregateReport } from "../skills/batch/aggregate-report.skill.js";
 import { runCobolToJavaSingleFileWorkflow } from "./cobol-to-java-single-file.workflow.js";
@@ -62,18 +62,25 @@ export async function runCobolToJavaBatchWorkflow(
   // 2. Dependency ordering
   const { order, hasCycle } = await buildDependencyGraph(files.map(f => f.sourceFile));
   const fileMap = new Map(files.map(f => [f.sourceFile, f]));
-  const orderedFiles = order.map(p => fileMap.get(p)).filter((f): f is NonNullable<typeof f> => f !== undefined);
+  const orderedFiles: CobolFileEntry[] = [];
+  for (const p of order) {
+    const entry = fileMap.get(p);
+    if (entry) orderedFiles.push(entry);
+  }
 
   // 3. Sequential migration — concurrency is intentionally 1
   const fileResults: BatchFileResult[] = [];
-  for (let i = 0; i < orderedFiles.length; i++) {
-    const { sourceFile, className } = orderedFiles[i];
+  for (const [i, { sourceFile, className }] of orderedFiles.entries()) {
     const started = performance.now();
     dependencies.onFileStart?.(sourceFile, className, i, orderedFiles.length);
     try {
       const result = await runCobolToJavaSingleFileWorkflow(
         { sourceFile, outputDir, className, maxAttempts: maxAttemptsPerFile },
-        { model: dependencies.model, runsDir: batchRunDir, javacTimeoutMs: dependencies.javacTimeoutMs },
+        {
+          model: dependencies.model,
+          runsDir: batchRunDir,
+          ...(dependencies.javacTimeoutMs !== undefined ? { javacTimeoutMs: dependencies.javacTimeoutMs } : {}),
+        },
       );
       const fileResult: BatchFileResult = {
         sourceFile,

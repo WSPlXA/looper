@@ -10,10 +10,25 @@ Return JSON only. Do not use markdown. Output exactly one Java class.
 The Java class name must match the requested className. Do not use external libraries.
 Preserve COBOL business intent. Never claim compilation success; tools decide it.`;
 
+const PLAN_SCHEMA_EXAMPLE = `{
+  "summary": "one-line description of what the program does",
+  "entryPoint": "run",
+  "variables": [
+    {"cobolName": "A", "javaName": "a", "javaType": "int"},
+    {"cobolName": "TOTAL", "javaName": "total", "javaType": "int"}
+  ],
+  "unsupportedFeatures": []
+}
+Rules:
+- variables must use exactly these field names: cobolName, javaName, javaType
+- unsupportedFeatures values must be one of: COPY, EXEC_SQL, JCL, FILE_SECTION, INDEXED_FILE_IO, CICS
+- If no variables exist, use an empty array: "variables": []
+- If no unsupported features exist, use an empty array: "unsupportedFeatures": []`;
+
 export function buildPlanningAgent(model: ModelClient) {
   return buildJsonAgent<{ cobolSource: string; targetJavaProfile: TargetJavaProfile; className: string }, MigrationPlan>({
     model,
-    systemPrompt: `${migrationSystem}\nProduce a migration plan with summary, entryPoint, variables, and unsupportedFeatures.`,
+    systemPrompt: `${migrationSystem}\nProduce a migration plan as JSON with this exact shape:\n${PLAN_SCHEMA_EXAMPLE}`,
     buildUserPrompt: ({ cobolSource, targetJavaProfile, className }) => `Analyze this COBOL source and return the plan JSON. The plan must obey this deterministic target architecture profile:\n${describeTargetJavaProfile(targetJavaProfile, className)}\nCOBOL source:\n${cobolSource}`,
     parse: migrationPlanSchema.parse,
   });

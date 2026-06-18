@@ -1,8 +1,8 @@
 # deepseek-loop-engine
 
-A durable state-graph agent runtime for compiler-driven COBOL-to-Java migration.
+一个用于编译器驱动的 COBOL 到 Java 迁移的 durable state-graph agent runtime。
 
-`deepseek-loop-engine` coordinates COBOL intake, capability gating, analysis, migration planning, Java generation, compilation, error classification, repair, verification, and reporting through a bounded durable graph. DeepSeek proposes structured actions; deterministic tools and verifiers control state transitions.
+`deepseek-loop-engine` 通过受约束的 durable graph，协调 COBOL 输入、能力准入（capability gating）、分析、迁移规划、Java 代码生成、编译、错误分类、修复、验证和报告。DeepSeek 负责生成结构化的 actions；确定性的 tools 和 verifiers 控制状态流转。
 
 ```text
 sourceIntake
@@ -23,79 +23,79 @@ verify --SUCCESS--> report
 verify --FAILED--> report
 ```
 
-The model cannot set `SUCCESS` or write files directly. Generate/repair calls return validated `WRITE_FILE` or `PATCH_FILE` actions whose path must be exactly the target Java file under the controlled run output directory. `CompileNode` can only produce `COMPILE_PASSED`; only `VerifyNode` can produce `SUCCESS` after checking the real `javac` result, generated source, class name, and optional verification callback.
+model 无法直接设置 `SUCCESS` 状态或直接写入文件。Generate/repair 调用返回经过校验的 `WRITE_FILE` 或 `PATCH_FILE` actions，其路径必须与受控的 run 输出目录下的目标 Java 文件完全一致。`CompileNode` 只能产生 `COMPILE_PASSED` 状态；只有 `VerifyNode` 在检查了真实的 `javac` 结果、生成的源码、类名以及可选的验证回调（verification callback）之后，才能产生 `SUCCESS` 状态。
 
-Missing COPYBOOK context produces `INTERRUPTED` with `requiredInput.copybookSearchPath`. Other unsupported V1 features (`EXEC SQL`, JCL, `FILE SECTION`, indexed file I/O, CICS) stop before model generation.
+缺失 `COPYBOOK` context 时，会产生带有 `requiredInput.copybookSearchPath` 的 `INTERRUPTED` 状态。其他不支持的 V1 特性（`EXEC SQL`、JCL、`FILE SECTION`、索引文件 I/O、CICS）会在 model 运行生成前终止。
 
-The runtime has two distinct bounded loops: the generic StateGraph execution loop and the conditional compile-classify-repair loop. Its implementation style is a LangGraph-style durable state graph with Mastra-style TypeScript runtime primitives and compiler-gated state advancement.
+该 runtime 包含两个不同的有界循环：通用的 `StateGraph` 执行循环以及条件驱动的 compile-classify-repair 循环。其实现风格为 LangGraph 风格的 durable state graph，结合了 Mastra 风格的 TypeScript runtime primitives 以及由编译器把关的状态演进机制（compiler-gated state advancement）。
 
-## Target Java architecture
+## 目标 Java 架构 (Target Java architecture)
 
-Target Java architecture is controlled by a deterministic `TargetJavaProfile`, not by the model. `resolveJavaArchitecture` selects and checkpoints the active profile before migration planning. The profile is injected into planning, generation, and repair prompts, then independently enforced by `ArchitectureValidator` before any generated or repaired source is written. `VerifyNode` validates the profile again before it can produce `SUCCESS`.
+目标 Java 架构由确定性的 `TargetJavaProfile` 控制，而不是由 model 决定。`resolveJavaArchitecture` 会在迁移规划前选择并对当前 active 的 profile 进行 checkpoint。该 profile 会被注入到 planning、generation 和 repair 的 prompts 中，然后在写入任何生成或修复的源码之前，由 `ArchitectureValidator` 独立强制执行。`VerifyNode` 也会在生成 `SUCCESS` 之前再次验证该 profile。
 
-Default V1 profile: `plain-java-single-class-v1`.
+默认 V1 profile：`plain-java-single-class-v1`。
 
-- exactly one Java source file and one declared Java type
-- public class name equals the CLI `targetClassName`
-- no package declaration
-- no external dependencies; only JDK `java.*` / `javax.*` imports are permitted
-- no Spring, Lombok, persistence framework, Maven, or Gradle symbols
-- COBOL `PROCEDURE DIVISION` maps to `public void run()`
-- `public static void main(String[] args)` delegates to `new TargetClass().run()`
-- COBOL `DISPLAY` maps to `System.out`
-- source must compile with plain `javac`
+- 恰好只有一个 Java 源文件和一个声明的 Java 类型
+- public 类名与 CLI 的 `targetClassName` 一致
+- 无 package 声明
+- 无外部依赖；仅允许导入 JDK `java.*` / `javax.*`
+- 无 Spring、Lombok、持久化框架、Maven 或 Gradle 标识
+- COBOL `PROCEDURE DIVISION` 映射为 `public void run()`
+- `public static void main(String[] args)` 代理调用 `new TargetClass().run()`
+- COBOL `DISPLAY` 映射到 `System.out`
+- 源码必须能通过原生的 `javac` 编译
 
-The model cannot introduce frameworks, packages, extra files, extra type layouts, build dependencies, or alternate entry points unless a different profile is explicitly supplied by policy. Architecture validation results and the active profile ID are persisted in state, checkpoints, trace, and report artifacts.
+除非策略显式提供了不同的 profile，否则 model 无法引入任何框架、package、额外文件、额外的类型布局、构建依赖或交替入口点。架构验证结果以及 active 的 profile ID 会被持久化保存在 state、checkpoints、trace 和 report 等 artifacts 中。
 
-## Runtime layout and physical cost
+## Runtime 布局与物理开销 (Runtime layout and physical cost)
 
-- `core/graph/` contains the generic bounded StateGraph runner. It imports no COBOL, Java, `javac`, or DeepSeek code.
-- `core/checkpoint/` writes one immutable checkpoint envelope after every completed node and can load the latest checkpoint. Resume commands are not implemented yet.
-- `core/actions/` validates model-proposed file actions and applies unified diffs without invoking a shell.
-- `core/architecture/` defines the domain-neutral policy contract; `architecture/java/` contains the deterministic Java profile and single-pass source validator.
-- `models/deepseek/` performs one OpenAI-compatible HTTP request per model step. The model name and base URL are configuration, not constants.
-- `loops/compile-repair.loop.ts` is now a thin graph assembler. Compile attempts remain a contiguous append-only array; error classifications are appended separately by attempt number.
-- `tools/shell.tool.ts` invokes executables with argv and `shell: false`, caps captured output at 2 MiB, and enforces a timeout. This prevents shell injection, unbounded stderr allocation, and hung compiler processes.
-- After each node, persistence order is `state.json`, checkpoint, then transition trace. State/checkpoint writes use temp-file + rename; trace writes are serialized JSONL appends. There is no concurrent shared writer or lock convoy.
+- `core/graph/` 包含通用的有界 `StateGraph` runner。它不导入任何 COBOL、Java、`javac` 或 DeepSeek 代码。
+- `core/checkpoint/` 在每个完成的节点之后写入一个不可变的 checkpoint 包，并能够加载最新的 checkpoint。Resume 命令目前尚未实现。
+- `core/actions/` 用于校验 model 提出的文件 actions，并直接应用统一的 diff，而无需调用 shell。
+- `core/architecture/` 定义了领域中立的策略契约；`architecture/java/` 包含确定性的 Java profile 以及单遍源码验证器。
+- `models/deepseek/` 每个 model 步骤执行一次与 OpenAI 兼容的 HTTP 请求。Model 名称和 base URL 是配置项，而非常量。
+- `loops/compile-repair.loop.ts` 现为一个轻量级的 graph assembler。编译尝试保持为连续的 append-only 数组；错误分类则按 attempt number 分开追加。
+- `tools/shell.tool.ts` 使用 argv 和 `shell: false` 来调用可执行文件，将捕获的输出限制在 2 MiB 以内，并强制执行超时。这可以防止 shell 注入、无限制的 stderr 内存分配以及编译器进程卡死。
+- 每个节点执行后，持久化顺序为：`state.json` -> checkpoint -> transition trace。State/checkpoint 的写入使用 temp-file + rename 的机制；trace 的写入则是序列化的 JSONL 追加。这里不存在并发的共享写入者或锁护送（lock convoy）。
 
-The dominant costs are model network latency and `javac` process startup. Cache-line alignment, Arena allocation, SoA, and parallel compilation would not improve V1 throughput measurably. Batch work is intentionally deferred until dependency ordering and backpressure exist.
+主要的物理开销是 model 网络延迟和 `javac` 进程启动。Cache-line 对齐、Arena 分配、SoA 以及并行编译在 V1 版本中无法明显提升吞吐量。批处理工作已被有意推迟，直至依赖关系排序和背压机制实现。
 
-## Prerequisites
+## 前提条件 (Prerequisites)
 
 - Node.js 20+
-- JDK with `javac` on `PATH`
-- A DeepSeek-compatible endpoint and API key
+- JDK 且 `javac` 已配置在 `PATH` 中
+- 兼容 DeepSeek 的 API 端点和 API key
 
 ```powershell
 npm install
 Copy-Item .env.example .env
-# Edit .env. The exact V4 Pro model identifier depends on the provider.
+# 编辑 .env。具体的 V4 Pro model 标识符取决于提供商。
 npm run build
 npm test
 ```
 
-Run a migration:
+运行迁移：
 
 ```powershell
 npm run migrate -- examples/cobol/HELLO.cob examples/output Hello 5
 ```
 
-## Docker build and test
+## Docker 构建与测试 (Docker build and test)
 
-The `test` target installs OpenJDK, builds TypeScript, and executes the full test suite during image construction:
+`test` 目标会在镜像构建期间安装 OpenJDK、构建 TypeScript 并执行完整的测试套件：
 
 ```powershell
 docker compose build test
 docker compose run --rm test
 ```
 
-Build the reduced runtime image without starting a model call:
+构建精简的 runtime 镜像，不启动 model 调用：
 
 ```powershell
 docker compose --profile migrate build migrate
 ```
 
-Run the example migration only after exporting a valid API key and provider-specific model identifier:
+在导出有效的 API key 和特定提供商的 model 标识符后，才能运行示例迁移：
 
 ```powershell
 $env:DEEPSEEK_API_KEY="..."
@@ -103,9 +103,9 @@ $env:DEEPSEEK_MODEL="deepseek-v4-pro"
 docker compose --profile migrate run --rm migrate
 ```
 
-`runs/` and `examples/output/` are bind-mounted so checkpoints, traces, reports, and generated Java remain on the host.
+`runs/` 和 `examples/output/` 会进行绑定挂载，以便 checkpoints、traces、reports 和生成的 Java 代码保存在宿主机上。
 
-Artifacts:
+生成产物（Artifacts）：
 
 ```text
 runs/<run-id>/
@@ -120,20 +120,23 @@ runs/<run-id>/
   output/Hello.java
 ```
 
-On success, the final source is also copied to the CLI `output-dir`. Source-read, model, action validation, compilation, and verification failures still produce state, failure checkpoint, trace, and report artifacts.
+成功时，最终的源文件也会被复制到 CLI 的 `output-dir` 中。源码读取、model 调用、action 校验、编译和验证失败仍会生成相应的 state、失败时的 checkpoint、trace 以及 report 等 artifacts。
 
-## Stop and overload behavior
+## 终止与重载行为 (Stop and overload behavior)
 
-- Compile repair is capped by `maxAttempts`; no unbounded retry queue exists.
-- The graph has a transition budget, so a malformed cycle cannot run forever.
-- Model calls default to 120 seconds; compiler calls default to 30 seconds.
-- Compiler output is bounded to 2 MiB.
-- V1 is single-run/single-writer. Do not add file-level concurrency before COPYBOOK/dependency ordering and a bounded work queue are implemented.
+- 编译修复受到 `maxAttempts` 的上限约束；不存在无界的重试队列。
+- 图具有转换预算限制，因此异常的循环不会无限执行。
+- Model 调用超时默认位 120 秒；编译器调用超时默认为 30 秒。
+- 编译器输出大小限制在 2 MiB 以内。
+- V1 是单运行/单写入者模式。在实现 COPYBOOK/依赖关系排序以及有界工作队列之前，不要添加文件级别的并发。
 
-## Scope
+## 范围 (Scope)
 
-Included: durable StateGraph runtime, checkpoints, structured actions, deterministic error classification, human interrupt state, verification gate, DeepSeek adapter, CLI, JSONL trace, JSON report, and real-`javac` integration tests.
+- 包含：durable StateGraph runtime、checkpoints、结构化的 actions、确定性错误分类、人工干预状态（human interrupt state）、验证门（verification gate）、DeepSeek 适配器、CLI、JSONL trace、JSON report，以及真实的 `javac` 集成测试。
+- 延后：HTTP 服务器、批量迁移（batch migration）、GnuCOBOL 行为等价对比、COPYBOOK 展开、DB2、JCL、CICS，以及多 agent 协作。
 
-Deferred: HTTP server, batch migration, GnuCOBOL behavior comparison, COPYBOOK expansion, DB2, JCL, CICS, and multi-agent collaboration.
+## 参考资料 (References)
 
-References: [DeepSeek Chat API](https://api-docs.deepseek.com/api/create-chat-completion), [DeepSeek JSON Output](https://api-docs.deepseek.com/guides/json_mode), [Node child processes](https://nodejs.org/api/child_process.html).
+- [DeepSeek Chat API](https://api-docs.deepseek.com/api/create-chat-completion)
+- [DeepSeek JSON Output](https://api-docs.deepseek.com/guides/json_mode)
+- [Node child processes](https://nodejs.org/api/child_process.html)

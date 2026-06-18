@@ -8,7 +8,7 @@ function extractCopyTargets(source: string): string[] {
   const pattern = /^\s*COPY\s+([A-Za-z0-9_$#@-]+)/gim;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(source)) !== null) {
-    targets.push(match[1].toUpperCase());
+    if (match[1]) targets.push(match[1].toUpperCase());
   }
   return [...new Set(targets)];
 }

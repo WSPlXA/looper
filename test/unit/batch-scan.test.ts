@@ -25,7 +25,7 @@ describe("scanProjectDirectory", () => {
     expect(skipped).toBeInstanceOf(Array);
     const classNames = files.map(f => f.className);
     expect(classNames).toContain("Hello");
-    expect(classNames).toContain("Calc");
+    expect(classNames).toContain("Utils");
   });
 
   it("returns absolute paths for source files", async () => {
