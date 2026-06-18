@@ -9,7 +9,8 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "migrate": "tsx src/apps/cli/main.ts migrate-one"
+    "migrate": "tsx src/apps/cli/main.ts migrate-one",
+    "migrate-batch": "tsx src/apps/cli/main.ts migrate-batch"
   },
   "engines": { "node": ">=20" },
   "dependencies": {

@@ -1,0 +1,7 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. MAIN-WITH-COPY.
+       DATA DIVISION.
+       COPY UTILS.
+       PROCEDURE DIVISION.
+           DISPLAY 'MAIN'.
+           STOP RUN.
