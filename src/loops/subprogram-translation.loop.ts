@@ -11,6 +11,10 @@ type TranslationState = {
 };
 
 const VALID_METHOD_NAME = /^[a-z][A-Za-z0-9_$]*$/;
+// Nested method definition inside a body — invalid Java
+const NESTED_METHOD_RE = /^\s*(?:public|private|protected|static|void|int|long|boolean|String|byte|char|double|float)\s+\w+\s*\(/m;
+// Empty if condition: if (/* ... */)
+const COMMENTED_IF_RE = /if\s*\(\/\*/;
 
 function buildSubprogramTranslationLoop(model: ModelClient, maxAttempts: number) {
   const translate = buildSubprogramTranslatorAgent(model);
@@ -34,6 +38,12 @@ function buildSubprogramTranslationLoop(model: ModelClient, maxAttempts: number)
         const expected = state.subprogram.linkageParams.length;
         if (r.params.length !== expected) {
           return { passed: false, reason: `params count mismatch: got ${r.params.length}, expected ${expected} (from LINKAGE SECTION)` };
+        }
+        if (NESTED_METHOD_RE.test(r.body)) {
+          return { passed: false, reason: "body contains a nested method definition — Java does not allow methods inside methods. Use inline code or a switch statement instead." };
+        }
+        if (COMMENTED_IF_RE.test(r.body)) {
+          return { passed: false, reason: "body contains 'if (/* ... */)' with an empty condition — use 'if (false /* UNRESOLVED */)' or remove the condition." };
         }
         return { passed: true, reason: "Method structure is valid" };
       },

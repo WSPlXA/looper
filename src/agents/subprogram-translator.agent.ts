@@ -13,6 +13,9 @@ Rules:
 - returnType is "void" unless the program clearly computes and returns a single scalar.
 - params must use exactly these field names: name, type
 - body must contain only the Java method body (no signature line, no outer braces).
+- NEVER write nested method definitions inside body — Java does not allow this. Use inline code or switch statements.
+- NEVER write if (/* comment */) — an if condition must be a real boolean expression. If a condition is unresolvable, write if (false /* UNRESOLVED: original condition */).
+- If a COBOL CALL target is an OS function (CBL_CREATE_FILE etc.), write /* UNRESOLVED: CALL X(args) */ and skip the return-code check.
 
 Output JSON shape:
 {

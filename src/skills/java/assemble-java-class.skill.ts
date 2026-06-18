@@ -4,6 +4,14 @@ import type { JavaMethodTranslation } from "../../schemas/assembly-state.schema.
 // Anchored to end-of-line so (.*) captures everything up to the last ) on the line.
 const TODO_CALL_RE = /\/\/ TODO call ([A-Za-z0-9_$#@-]+)\((.*)\)\s*$/gm;
 
+// if (/* any comment */) → if (false /* UNRESOLVED: any comment */)
+// Prevents "empty if condition" compile errors caused by unresolved COBOL return-code checks.
+const COMMENTED_IF_RE = /if\s*\(\/\*([^*]*(?:\*(?!\/)[^*]*)*)\*\/\s*\)/g;
+
+function sanitizeBody(body: string): string {
+  return body.replace(COMMENTED_IF_RE, (_, inner: string) => `if (false /* UNRESOLVED: ${inner.trim()} */)`);
+}
+
 function resolveCallPlaceholders(body: string, methodMap: Map<string, string>): string {
   return body.replace(TODO_CALL_RE, (_, programId: string, args: string) => {
     const methodName = methodMap.get(programId.toUpperCase());
@@ -69,7 +77,7 @@ export function assembleJavaClass(
     // +1 because line numbers are 1-based and we haven't pushed this line yet
     methodLineStarts[m.methodName] = lines.length + 1;
     lines.push(signatureLine);
-    const resolved = resolveCallPlaceholders(m.body, methodMap);
+    const resolved = sanitizeBody(resolveCallPlaceholders(m.body, methodMap));
     lines.push(indentLines(resolved, "        "));
     lines.push("    }");
   }
