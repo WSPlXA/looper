@@ -15,7 +15,7 @@ import { scanSubprogramsNode } from "../nodes/assembly/scan-subprograms.node.js"
 import { expandCopybooksNode } from "../nodes/assembly/expand-copybooks.node.js";
 import { extractCallGraphNode } from "../nodes/assembly/extract-call-graph.node.js";
 import { buildTranslateSubprogramsNode } from "../nodes/assembly/translate-subprograms.node.js";
-import { buildAssembleProgramNode } from "../nodes/assembly/assemble-program.node.js";
+import { assembleProgramNode } from "../nodes/assembly/assemble-program.node.js";
 import { buildCompileAssemblyNode } from "../nodes/assembly/compile-assembly.node.js";
 import { classifyAssemblyErrorNode } from "../nodes/assembly/classify-assembly-error.node.js";
 import { buildRepairAssemblyNode } from "../nodes/assembly/repair-assembly.node.js";
@@ -39,7 +39,7 @@ function buildAssemblyNodes(
     expandCopybooks: expandCopybooksNode,
     extractCallGraph: extractCallGraphNode,
     translateSubprograms: buildTranslateSubprogramsNode(deps),
-    assembleProgram: buildAssembleProgramNode(deps),
+    assembleProgram: assembleProgramNode,
     compileAssembly: buildCompileAssemblyNode(deps),
     classifyAssemblyError: classifyAssemblyErrorNode,
     repairAssembly: buildRepairAssemblyNode(deps),

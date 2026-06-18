@@ -50,11 +50,12 @@ export async function runSubprogramTranslationLoop(
   knownSignatures: string,
   model: ModelClient,
   maxAttempts: number,
+  errorContext?: string,
 ): Promise<SubprogramTranslationResult> {
   const runLoop = buildSubprogramTranslationLoop(model, maxAttempts);
   const { state, attempts, evaluation, stopped } = await runLoop({
     subprogram,
-    knownSignatures,
+    knownSignatures: errorContext ? `${knownSignatures}\nPrevious translation caused compile error: ${errorContext}\nAvoid this mistake.` : knownSignatures,
     result: null,
   });
   if (stopped === "PASSED" && state.result) {

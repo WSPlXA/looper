@@ -58,6 +58,8 @@ export const assemblyMigrationStateSchema = z.object({
 
   assembledSource: z.string().optional(),
   assembledFilePath: z.string().optional(),
+  /** methodName → 1-based line number of the method signature in the assembled file */
+  assembledMethodRanges: z.record(z.number()).optional(),
 
   compileAttempts: z.array(programCompileAttemptSchema).default([]),
 
