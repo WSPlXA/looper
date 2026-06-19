@@ -12,11 +12,11 @@ const COMMENTED_IF_RE = /if\s*\(\/\*([^*]*(?:\*(?!\/)[^*]*)*)\*\/\s*\)/g;
 // Prevents assignments where the LLM put a comment in place of an unresolvable expression.
 const ASSIGN_COMMENT_RE = /(\b\w+)\s*=\s*\/\*([^*]*(?:\*(?!\/)[^*]*)*)\*\/\s*;/g;
 
-// Strip access modifiers from declarations inside method body (8+ spaces indent = inside method).
+// Strip access/static modifiers from declarations inside method body (8+ spaces indent = inside method).
 // "        public static final int X = 0;" → "        final int X = 0;"
-// "        private String name = "";" → "        String name = "";"
-// public/private/protected are illegal inside method bodies.
-const METHOD_LEVEL_MODIFIER_RE = /^( {8,})(?:public|private|protected)\s+(?:static\s+)?/gm;
+// "        static boolean initDone = false;" → "        boolean initDone = false;"
+// Java has no static local variables; public/private/protected are also illegal inside method bodies.
+const METHOD_LEVEL_MODIFIER_RE = /^( {8,})((?:(?:public|private|protected|static)\s+)+)/gm;
 
 // Strip English prose lines leaked from LLM reasoning chains.
 // A prose line: 8+ spaces indent, starts with capital letter, no Java operators, 25+ chars.
@@ -27,7 +27,7 @@ function sanitizeBody(body: string): string {
   return body
     .replace(COMMENTED_IF_RE, (_, inner: string) => `if (false /* UNRESOLVED: ${inner.trim()} */)`)
     .replace(ASSIGN_COMMENT_RE, (_, varName: string, inner: string) => `${varName} = 0; /* UNRESOLVED: ${inner.trim()} */`)
-    .replace(METHOD_LEVEL_MODIFIER_RE, "$1")
+    .replace(METHOD_LEVEL_MODIFIER_RE, "$1")  // strip modifiers, keep indentation
     .replace(PROSE_LINE_RE, (_, indent: string, text: string) => `${indent}// [REASONING-STRIPPED] ${text.trim().slice(0, 80)}`);
 }
 
@@ -59,15 +59,25 @@ export function assembleJavaClass(
   failedTranslations: readonly string[],
   extraClassFields: readonly string[] = [],
 ): AssembleResult {
+  // Deduplicate method names: if two programs chose the same name+signature, append _2, _3, …
+  const seenSignatures = new Map<string, number>(); // "name(types)" → count
+  const deduped = translatedMethods.map(m => {
+    const sig = `${m.methodName}(${m.params.map(p => p.type).join(",")})`;
+    const count = (seenSignatures.get(sig) ?? 0) + 1;
+    seenSignatures.set(sig, count);
+    if (count === 1) return m;
+    return { ...m, methodName: `${m.methodName}_${count}` };
+  });
+
   const methodMap = new Map(
-    translatedMethods.map(m => [m.programId.toUpperCase(), m.methodName]),
+    deduped.map(m => [m.programId.toUpperCase(), m.methodName]),
   );
 
-  const entryMethod = translatedMethods.find(
+  const entryMethod = deduped.find(
     m => m.programId.toUpperCase() === entryProgramId.toUpperCase(),
   );
-  const entryMethodName = entryMethod?.methodName ?? translatedMethods[0]?.methodName ?? "run";
-  const entryParams = entryMethod?.params ?? translatedMethods[0]?.params ?? [];
+  const entryMethodName = entryMethod?.methodName ?? deduped[0]?.methodName ?? "run";
+  const entryParams = entryMethod?.params ?? deduped[0]?.params ?? [];
 
   const mainBody =
     entryParams.length === 0
@@ -96,7 +106,7 @@ export function assembleJavaClass(
 
   const methodLineStarts: Record<string, number> = {};
 
-  for (const m of translatedMethods) {
+  for (const m of deduped) {
     lines.push("");
     const params = m.params.map(p => `${p.type} ${p.name}`).join(", ");
     const signatureLine = `    public ${m.returnType} ${m.methodName}(${params}) {`;

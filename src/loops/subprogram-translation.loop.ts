@@ -18,8 +18,9 @@ const VALID_METHOD_NAME = /^[a-z][A-Za-z0-9_$]*$/;
 const NESTED_METHOD_RE = /^\s*(?:public|private|protected|static|void|int|long|boolean|String|byte|char|double|float)\s+\w+\s*\(/m;
 const COMMENTED_IF_RE = /if\s*\(\/\*/;
 const ASSIGN_COMMENT_RE = /\b\w+\s*=\s*\/\*/;
-// access modifiers (public/private/protected [static]) on declarations inside method body
-const PUBLIC_IN_BODY_RE = /^ {8,}(?:public|private|protected)\s+(?:static\s+)?(?:final\s+)?(?:int|long|double|float|boolean|byte|short|char|String)\b/m;
+// access/static modifiers on declarations inside method body — all illegal in Java method scope
+// matches: "public static final int X", "private String x", "static boolean x", etc.
+const PUBLIC_IN_BODY_RE = /^ {8,}(?:(?:public|private|protected)\s+(?:static\s+)?|static\s+)(?:final\s+)?(?:int|long|double|float|boolean|byte|short|char|String|\w+\[)\b/m;
 // English prose lines: indented, starts uppercase, no Java operators, 25+ chars → leaked reasoning
 const PROSE_IN_BODY_RE = /^ {8,}[A-Z][a-zA-Z][^;{}()=\[\]<>@\n]{25,}\s*$/m;
 
@@ -60,7 +61,7 @@ function buildSubprogramTranslationLoop(model: ModelClient, maxAttempts: number)
           return { passed: false, reason: "body contains 'x = /* ... */;' — assign a real value or 0, not a block comment: e.g. 'x = 0; /* UNRESOLVED: expr */'" };
         }
         if (PUBLIC_IN_BODY_RE.test(r.body)) {
-          return { passed: false, reason: "body contains 'public/private/protected [static]' field declarations inside the method — these are illegal in method bodies; declare fields at class level or use plain local variables (no access modifier)" };
+          return { passed: false, reason: "body contains 'public/private/protected/static' modifier on a local declaration — Java has no static local variables and no access-modified locals; remove the modifier: 'int x = 0;' not 'static int x = 0;'" };
         }
         if (PROSE_IN_BODY_RE.test(r.body)) {
           return { passed: false, reason: "body contains English prose (leaked LLM reasoning text) — every non-blank, non-comment line must be valid Java; wrap reasoning in // comments or remove it entirely" };

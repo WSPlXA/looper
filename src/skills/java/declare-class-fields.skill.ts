@@ -41,19 +41,19 @@ function parseErrorLineNumbers(stderr: string): Set<number> {
   return lines;
 }
 
-/** Names already declared at class or method level. */
+/**
+ * Collect names already declared at CLASS level only (4-space indent + access modifier).
+ * Intentionally excludes local variables inside methods (8+ space indent).
+ * This prevents local vars in one method from blocking the same name from becoming a class field.
+ */
 function collectDeclaredNames(javaSource: string): Set<string> {
   const names = new Set<string>();
-  for (const m of javaSource.matchAll(/\bpublic\s+\S+\s+(\w+)\s*\(/g)) {
+  // Method names
+  for (const m of javaSource.matchAll(/\b(?:public|private|protected)\s+\S+\s+(\w+)\s*\(/g)) {
     const n = m[1]; if (n) names.add(n);
   }
-  for (const m of javaSource.matchAll(/\bprivate\s+\S+\s+(\w+)\s*[=;]/g)) {
-    const n = m[1]; if (n) names.add(n);
-  }
-  for (const m of javaSource.matchAll(
-    /\b(?:int|long|double|float|String|boolean|byte|char|short)(?:\[\])*\s+(\w+)\s*[=;,)]/g,
-  )) { const n = m[1]; if (n) names.add(n); }
-  for (const m of javaSource.matchAll(/\bfor\s*\(\s*\w+\s+(\w+)\s*[=:]/g)) {
+  // Class-level fields: exactly 4 spaces + access/static modifier
+  for (const m of javaSource.matchAll(/^ {4}(?:private|public|protected|static)\s+(?:final\s+)?(?:\w+(?:\[\])*)\s+(\w+)\s*[=;]/gm)) {
     const n = m[1]; if (n) names.add(n);
   }
   return names;
@@ -85,16 +85,45 @@ function findMaxLiteralIndex(name: string, source: string): number {
   return max;
 }
 
+/**
+ * Check if a variable is assigned to a value that comes from a String variable or String literal.
+ * Used to detect when an array should be String[] instead of int[].
+ */
+function isAssignedStringValue(name: string, source: string): boolean {
+  // Direct string literal assignment: name = "..." or name[i] = "..."
+  if (new RegExp(`\\b${name}(?:\\[\\w+\\])*\\s*=\\s*"`).test(source)) return true;
+  if (new RegExp(`\\b${name}\\s*\\+=\\s*"`).test(source)) return true;
+  // String method calls on the variable itself
+  if (new RegExp(`\\b${name}\\s*\\.\\s*(?:length\\(|charAt\\(|substring\\(|indexOf\\(|contains\\(|equals\\(|isEmpty\\(|trim\\(|replace\\(|startsWith\\(|endsWith\\(|toUpper|toLower|format\\()`).test(source)) return true;
+  // String method calls on array element: name[i].method()
+  if (new RegExp(`\\b${name}\\[\\w+\\]\\s*\\.\\s*(?:length\\(|charAt\\(|equals\\(|trim\\(|isEmpty\\()`).test(source)) return true;
+
+  // name[i] = someVar where someVar is a String parameter or local
+  const arrAssignRe = new RegExp(`\\b${name}(?:\\[\\w+\\])+\\s*=\\s*(\\w+)`, "g");
+  for (const m of source.matchAll(arrAssignRe)) {
+    const assignedVar = m[1];
+    if (!assignedVar) continue;
+    // Check if assignedVar is declared as String anywhere in the source
+    if (new RegExp(`\\bString(?:\\[\\])*\\s+${assignedVar}\\b`).test(source)) return true;
+    // Or if it's passed as a parameter with String type
+    if (new RegExp(`\\bString\\s+${assignedVar}[,)]`).test(source)) return true;
+  }
+  // Also: name = someStringVar (non-array)
+  const directAssignRe = new RegExp(`\\b${name}\\s*=\\s*(\\w+)\\s*;`, "g");
+  for (const m of source.matchAll(directAssignRe)) {
+    const assignedVar = m[1];
+    if (!assignedVar) continue;
+    if (new RegExp(`\\bString(?:\\[\\])*\\s+${assignedVar}\\b`).test(source)) return true;
+  }
+  return false;
+}
+
 /** Infer Java type and initializer for a symbol based on usage in the full source. */
 function inferFieldDeclaration(name: string, source: string): FieldDeclaration {
   const dims = inferArrayDims(name, source);
 
-  const isString =
-    new RegExp(`\\b${name}\\s*\\.\\s*(?:length|charAt|substring|indexOf|contains|equals|isEmpty|trim|replace|startsWith|endsWith)\\b`).test(source) ||
-    new RegExp(`\\b${name}\\s*=\\s*"`).test(source) ||
-    new RegExp(`\\b${name}\\s*\\+=\\s*"`).test(source);
-
   const isDouble = new RegExp(`\\b${name}\\s*=\\s*\\d+\\.\\d`).test(source);
+  const isString = !isDouble && isAssignedStringValue(name, source);
 
   const baseType = isString ? "String" : isDouble ? "double" : "int";
   const scalarInit = isString ? '""' : isDouble ? "0.0" : "0";
