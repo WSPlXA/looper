@@ -6,11 +6,29 @@ import { countNetBraces } from "./count-net-braces.skill.js";
 const TODO_CALL_RE = /\/\/ TODO call ([A-Za-z0-9_$#@-]+)\((.*)\)\s*$/gm;
 
 // if (/* any comment */) → if (false /* UNRESOLVED: any comment */)
-// Prevents "empty if condition" compile errors caused by unresolved COBOL return-code checks.
 const COMMENTED_IF_RE = /if\s*\(\/\*([^*]*(?:\*(?!\/)[^*]*)*)\*\/\s*\)/g;
 
+// x = /* expr */; → x = 0 /* UNRESOLVED: expr */;
+// Prevents assignments where the LLM put a comment in place of an unresolvable expression.
+const ASSIGN_COMMENT_RE = /(\b\w+)\s*=\s*\/\*([^*]*(?:\*(?!\/)[^*]*)*)\*\/\s*;/g;
+
+// Strip access modifiers from declarations inside method body (8+ spaces indent = inside method).
+// "        public static final int X = 0;" → "        final int X = 0;"
+// "        private String name = "";" → "        String name = "";"
+// public/private/protected are illegal inside method bodies.
+const METHOD_LEVEL_MODIFIER_RE = /^( {8,})(?:public|private|protected)\s+(?:static\s+)?/gm;
+
+// Strip English prose lines leaked from LLM reasoning chains.
+// A prose line: 8+ spaces indent, starts with capital letter, no Java operators, 25+ chars.
+// Example: "        Given the complexity, I'll assume we are to translate..."
+const PROSE_LINE_RE = /^( {8,})([A-Z][a-zA-Z][^;{}()=\[\]<>@\n]{25,})\s*$/gm;
+
 function sanitizeBody(body: string): string {
-  return body.replace(COMMENTED_IF_RE, (_, inner: string) => `if (false /* UNRESOLVED: ${inner.trim()} */)`);
+  return body
+    .replace(COMMENTED_IF_RE, (_, inner: string) => `if (false /* UNRESOLVED: ${inner.trim()} */)`)
+    .replace(ASSIGN_COMMENT_RE, (_, varName: string, inner: string) => `${varName} = 0; /* UNRESOLVED: ${inner.trim()} */`)
+    .replace(METHOD_LEVEL_MODIFIER_RE, "$1")
+    .replace(PROSE_LINE_RE, (_, indent: string, text: string) => `${indent}// [REASONING-STRIPPED] ${text.trim().slice(0, 80)}`);
 }
 
 function resolveCallPlaceholders(body: string, methodMap: Map<string, string>): string {
@@ -39,6 +57,7 @@ export function assembleJavaClass(
   entryProgramId: string,
   translatedMethods: readonly JavaMethodTranslation[],
   failedTranslations: readonly string[],
+  extraClassFields: readonly string[] = [],
 ): AssembleResult {
   const methodMap = new Map(
     translatedMethods.map(m => [m.programId.toUpperCase(), m.methodName]),
@@ -58,6 +77,12 @@ export function assembleJavaClass(
   const lines: string[] = [];
   lines.push(`public class ${className} {`);
   lines.push("");
+
+  if (extraClassFields.length > 0) {
+    lines.push("    // Class-level fields (COBOL EXTERNAL / shared WORKING-STORAGE)");
+    for (const decl of extraClassFields) lines.push(`    ${decl.trim()}`);
+    lines.push("");
+  }
 
   if (failedTranslations.length > 0) {
     lines.push(`    // ${failedTranslations.length} subprogram(s) failed translation and are omitted:`);

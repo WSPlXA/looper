@@ -71,6 +71,8 @@ export const assemblyMigrationStateSchema = z.object({
   assembledFilePath: z.string().optional(),
   /** methodName → 1-based line number of the method signature in the assembled file */
   assembledMethodRanges: z.record(z.number()).optional(),
+  /** Field declarations accumulated across repair rounds for undeclared symbols */
+  extraClassFieldDeclarations: z.array(z.string()).default([]),
 
   compileAttempts: z.array(programCompileAttemptSchema).default([]),
 

@@ -24,6 +24,7 @@ type MetaState = {
   // Set after each round
   lastRoundCompiled: boolean;
   lastRoundTranslationFailures: TranslationFailureInfo[];
+  lastRoundCompileErrors: string;       // javac stderr from last failed compile attempt
   lastRoundReportPath?: string;
   lastRoundAssembledFilePath?: string;
   roundsCompleted: number;
@@ -63,11 +64,13 @@ export async function runMetaSkillImprovementLoop(
     async step(state, round) {
       // From round 2 onward: generate new skill rules from the previous round's failures
       let accumulatedRules = state.accumulatedRules;
-      if (round > 1 && state.lastRoundTranslationFailures.length > 0) {
+      const hasFailures = state.lastRoundTranslationFailures.length > 0 || state.lastRoundCompileErrors !== "";
+      if (round > 1 && hasFailures) {
         const existingRulesText = formatSkillRulesForPrompt(accumulatedRules);
         try {
           const improved = await skillImprover({
             failureInfos: state.lastRoundTranslationFailures,
+            compileErrors: state.lastRoundCompileErrors,
             existingRules: existingRulesText,
             round,
           });
@@ -107,11 +110,16 @@ export async function runMetaSkillImprovementLoop(
           ...(f.lastAttemptBody !== undefined ? { lastAttemptBody: f.lastAttemptBody } : {}),
         }));
 
+      // Collect javac stderr from the last failed compile attempt for SkillImprover
+      const lastFailedCompile = [...result.state.compileAttempts].reverse().find(a => !a.success);
+      const lastRoundCompileErrors = lastFailedCompile ? lastFailedCompile.stderr : "";
+
       return {
         ...state,
         accumulatedRules,
         lastRoundCompiled: result.state.status === "SUCCESS",
         lastRoundTranslationFailures,
+        lastRoundCompileErrors,
         lastRoundReportPath: result.reportPath,
         ...(result.state.assembledFilePath !== undefined
           ? { lastRoundAssembledFilePath: result.state.assembledFilePath }
@@ -147,6 +155,7 @@ export async function runMetaSkillImprovementLoop(
     accumulatedRules: [],
     lastRoundCompiled: false,
     lastRoundTranslationFailures: [],
+    lastRoundCompileErrors: "",
     roundsCompleted: 0,
   };
 

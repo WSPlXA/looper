@@ -24,6 +24,7 @@ export const assembleProgramNode: GraphNode<AssemblyMigrationState> = {
       entryProgramId,
       state.translatedMethods,
       state.failedTranslations,
+      state.extraClassFieldDeclarations,
     );
 
     const outputDir = join(state.runDir, "output");

@@ -4,12 +4,15 @@ import type { ModelClient } from "../core/model/model-client.js";
 
 const SYSTEM = `You are a COBOL-to-Java translation skill engineer.
 
-You receive a list of failed COBOL-to-Java subprogram translations and their failure reasons.
-Your job is to produce new translation rules that will prevent these failures in future translation attempts.
+You receive:
+1. A list of COBOL subprogram translations that failed evaluation (wrong structure, bad syntax patterns)
+2. javac compile errors from the assembled Java class — these come from translations that PASSED evaluation but still produced invalid Java
+
+Your job is to produce new translation rules that will prevent both types of failures in future rounds.
 
 Each rule must be:
-- Specific to a pattern visible in the COBOL or failure reason
-- Actionable (what to do, not what to avoid)
+- Specific to a concrete pattern visible in the failure reason or compile error
+- Actionable: "when you see X in COBOL, write Y in Java" (not just "avoid Z")
 - Illustrated with a short COBOL snippet, the WRONG Java output, and the CORRECT Java output
 
 Return JSON only. No markdown.`;
@@ -23,7 +26,7 @@ const skillRuleSchema = z.object({
 });
 
 const outputSchema = z.object({
-  rules: z.array(skillRuleSchema).max(10),
+  rules: z.array(skillRuleSchema).max(12),
 });
 
 export type SkillRule = z.infer<typeof skillRuleSchema>;
@@ -33,8 +36,9 @@ type Input = {
     programId: string;
     cobolSnippet: string;
     failureReasons: string[];
-    lastAttemptBody?: string | undefined;  // accepts both Zod and local types
+    lastAttemptBody?: string | undefined;
   }>;
+  compileErrors: string;   // javac stderr from last compile attempt (may be empty)
   existingRules: string;
   round: number;
 };
@@ -43,20 +47,30 @@ export function buildSkillImproverAgent(model: ModelClient) {
   return buildJsonAgent<Input, z.infer<typeof outputSchema>>({
     model,
     systemPrompt: SYSTEM,
-    buildUserPrompt: ({ failureInfos, existingRules, round }) => {
-      const failureSummary = failureInfos.slice(0, 15).map(f =>
-        `PROGRAM-ID: ${f.programId}\n` +
-        `Failure reasons:\n${f.failureReasons.map(r => `  - ${r}`).join("\n")}\n` +
-        (f.lastAttemptBody ? `Last generated body (first 300 chars):\n${f.lastAttemptBody.slice(0, 300)}\n` : "") +
-        `COBOL snippet (first 400 chars):\n${f.cobolSnippet.slice(0, 400)}`
-      ).join("\n---\n");
+    buildUserPrompt: ({ failureInfos, compileErrors, existingRules, round }) => {
+      const parts: string[] = [`Round ${round} feedback:`];
 
-      return (
-        `Round ${round} translation failures (${failureInfos.length} total, showing first 15):\n\n` +
-        failureSummary +
-        (existingRules ? `\n\nExisting rules (do not duplicate):\n${existingRules}` : "") +
-        `\n\nGenerate new rules to prevent these failures. Return: {"rules": [{"title":"...","instruction":"...","cobolExample":"...","wrongJava":"...","correctJava":"..."}]}`
-      );
+      if (failureInfos.length > 0) {
+        const failureSummary = failureInfos.slice(0, 12).map(f =>
+          `PROGRAM-ID: ${f.programId}\n` +
+          `Failure reasons:\n${f.failureReasons.map(r => `  - ${r}`).join("\n")}\n` +
+          (f.lastAttemptBody ? `Last generated body (first 300 chars):\n${f.lastAttemptBody.slice(0, 300)}\n` : "") +
+          `COBOL snippet (first 400 chars):\n${f.cobolSnippet.slice(0, 400)}`
+        ).join("\n---\n");
+        parts.push(`\n## Evaluator failures (${failureInfos.length} total, showing first 12):\n${failureSummary}`);
+      }
+
+      if (compileErrors) {
+        parts.push(`\n## javac compile errors (translations that passed evaluation but failed to compile):\n${compileErrors.slice(0, 2000)}`);
+      }
+
+      if (existingRules) {
+        parts.push(`\n## Existing rules (do not duplicate):\n${existingRules}`);
+      }
+
+      parts.push(`\nAnalyze BOTH the evaluator failures AND the compile errors. For each distinct failure pattern, generate a rule. Return: {"rules": [{"title":"...","instruction":"...","cobolExample":"...","wrongJava":"...","correctJava":"..."}]}`);
+
+      return parts.join("\n");
     },
     parse: outputSchema.parse,
   });

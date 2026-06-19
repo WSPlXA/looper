@@ -15,6 +15,7 @@ Rules:
 - body must contain only the Java method body (no signature line, no outer braces).
 - NEVER write nested method definitions inside body — Java does not allow this. Use inline code or switch statements.
 - NEVER write if (/* comment */) — an if condition must be a real boolean expression. If a condition is unresolvable, write if (false /* UNRESOLVED: original condition */).
+- NEVER write x = /* comment */; — an assignment value must be a real expression. If a value is unresolvable, write x = 0; /* UNRESOLVED: original expression */
 - If a COBOL CALL target is an OS function (CBL_CREATE_FILE etc.), write /* UNRESOLVED: CALL X(args) */ and skip the return-code check.
 - Every { you open in body MUST be closed with } before the end of body. Count carefully — the body must have exactly equal { and } characters (outside string/char literals and comments).
 

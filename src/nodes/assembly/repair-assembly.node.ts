@@ -2,6 +2,7 @@ import type { GraphNode } from "../../core/graph/graph.node.js";
 import type { JavaMethodTranslation, AssemblyMigrationState } from "../../schemas/assembly-state.schema.js";
 import { runSubprogramTranslationLoop } from "../../loops/subprogram-translation.loop.js";
 import { assembleJavaClass } from "../../skills/java/assemble-java-class.skill.js";
+import { declareClassFields } from "../../skills/java/declare-class-fields.skill.js";
 import { writeTextFileTool } from "../../tools/filesystem.tool.js";
 import { runTracedCall } from "../../core/trace/traced-call.js";
 import type { AssemblyGraphDependencies } from "./assembly-node.dependencies.js";
@@ -59,6 +60,28 @@ export function buildRepairAssemblyNode(
         errorLineCount: errorLines.size,
         failingMethods: [...failingMethodNames],
       });
+
+      // ── Pass 1: structural repair ────────────────────────────────────────────
+      // Detect undeclared symbols (COBOL EXTERNAL / shared WORKING-STORAGE) and
+      // declare them as class fields. This fixes "cannot find symbol" errors that
+      // re-translation cannot fix because the symbol lives in another method's scope.
+      const { addedFields } = declareClassFields(
+        state.assembledSource ?? "",
+        lastAttempt.stderr,
+      );
+      const extraClassFieldDeclarations = [
+        ...state.extraClassFieldDeclarations,
+        ...addedFields
+          .map(f => f.declaration.trim())
+          .filter(d => !state.extraClassFieldDeclarations.includes(d)),
+      ];
+      if (addedFields.length > 0) {
+        await context.trace("repair.addedClassFields", {
+          count: addedFields.length,
+          names: addedFields.map(f => f.name),
+        });
+      }
+      // ────────────────────────────────────────────────────────────────────────
 
       // Map methodName → programId
       const methodToProgramId = new Map(
@@ -125,6 +148,7 @@ export function buildRepairAssemblyNode(
         entryProgramId,
         translatedMethods,
         state.failedTranslations,
+        extraClassFieldDeclarations,
       );
 
       await runTracedCall(
@@ -146,6 +170,7 @@ export function buildRepairAssemblyNode(
         state: {
           ...stateWithoutPending,
           translatedMethods,
+          extraClassFieldDeclarations,
           assembledSource: newSource,
           assembledMethodRanges: methodLineStarts,
           compileAttempts: updatedAttempts,
