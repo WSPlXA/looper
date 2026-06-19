@@ -16,6 +16,7 @@ Rules:
 - NEVER write nested method definitions inside body — Java does not allow this. Use inline code or switch statements.
 - NEVER write if (/* comment */) — an if condition must be a real boolean expression. If a condition is unresolvable, write if (false /* UNRESOLVED: original condition */).
 - If a COBOL CALL target is an OS function (CBL_CREATE_FILE etc.), write /* UNRESOLVED: CALL X(args) */ and skip the return-code check.
+- Every { you open in body MUST be closed with } before the end of body. Count carefully — the body must have exactly equal { and } characters (outside string/char literals and comments).
 
 Output JSON shape:
 {
@@ -28,7 +29,8 @@ Output JSON shape:
 
 type Input = {
   subprogram: SubprogramInfo;
-  knownSignatures: string;   // signatures of already-translated callees
+  knownSignatures: string;
+  skillRules: string;  // accumulated rules from meta-loop's SkillImprover
 };
 
 type RawOutput = Omit<JavaMethodTranslation, "programId" | "attempts">;
@@ -37,7 +39,8 @@ export function buildSubprogramTranslatorAgent(model: ModelClient) {
   return buildJsonAgent<Input, RawOutput>({
     model,
     systemPrompt: SYSTEM,
-    buildUserPrompt: ({ subprogram, knownSignatures }) =>
+    buildUserPrompt: ({ subprogram, knownSignatures, skillRules }) =>
+      (skillRules ? `## Learned rules from previous rounds:\n${skillRules}\n\n` : "") +
       `Translate this subprogram to a Java method.\n` +
       `PROGRAM-ID: ${subprogram.programId}\n` +
       `LINKAGE params (${subprogram.linkageParams.length}): ${JSON.stringify(subprogram.linkageParams)}\n` +
@@ -46,6 +49,10 @@ export function buildSubprogramTranslatorAgent(model: ModelClient) {
     parse: (raw) =>
       javaMethodTranslationSchema
         .pick({ methodName: true, params: true, returnType: true, body: true, notes: true })
+        .extend({
+          returnType: javaMethodTranslationSchema.shape.returnType.default("void"),
+          notes: javaMethodTranslationSchema.shape.notes.default(""),
+        })
         .parse(raw),
   });
 }

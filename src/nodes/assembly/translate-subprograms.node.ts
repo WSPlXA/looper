@@ -15,15 +15,13 @@ export function buildTranslateSubprogramsNode(
     async run(state, context) {
       const concurrency = deps.translationConcurrency ?? DEFAULT_CONCURRENCY;
       const subprogramMap = new Map(state.subprograms.map(s => [s.programId, s]));
+      const skillRules = state.injectedSkillRules;
 
-      await context.trace("translate.start", {
-        total: state.callOrder.length,
-        concurrency,
-      });
+      await context.trace("translate.start", { total: state.callOrder.length, concurrency });
 
       type SlotResult =
         | { ok: true; method: JavaMethodTranslation }
-        | { ok: false; programId: string; reason: string };
+        | { ok: false; programId: string; failureReasons: string[]; lastAttemptBody?: string; cobolSnippet: string };
 
       const slotResults = await runConcurrent(
         state.callOrder,
@@ -31,25 +29,43 @@ export function buildTranslateSubprogramsNode(
           const subprogram = subprogramMap.get(programId);
           if (!subprogram) return null;
 
-          const loopResult = await runTracedCall(
-            context.trace,
-            "model.call",
-            { operation: "translateSubprogram", programId },
-            () => runSubprogramTranslationLoop(subprogram, "", deps.model, state.maxTranslationAttempts),
-          );
+          try {
+            const loopResult = await runTracedCall(
+              context.trace,
+              "model.call",
+              { operation: "translateSubprogram", programId },
+              () => runSubprogramTranslationLoop(subprogram, "", deps.model, state.maxTranslationAttempts, skillRules),
+            );
 
-          if (loopResult.ok) {
-            await context.trace("translation.succeeded", { programId, attempts: loopResult.attempts });
-            return { ok: true as const, method: { programId, ...loopResult.method, attempts: loopResult.attempts } };
+            if (loopResult.ok) {
+              await context.trace("translation.succeeded", { programId, attempts: loopResult.attempts });
+              return { ok: true as const, method: { programId, ...loopResult.method, attempts: loopResult.attempts } };
+            }
+            await context.trace("translation.failed", { programId, attempts: loopResult.attempts, reasons: loopResult.failureReasons });
+            return {
+              ok: false as const,
+              programId,
+              failureReasons: loopResult.failureReasons,
+              lastAttemptBody: loopResult.lastAttemptBody,
+              cobolSnippet: subprogram.expandedSource.slice(0, 600),
+            };
+          } catch (err) {
+            const reason = err instanceof Error ? err.message : String(err);
+            await context.trace("translation.error", { programId, error: reason });
+            return {
+              ok: false as const,
+              programId,
+              failureReasons: [reason],
+              cobolSnippet: subprogram.expandedSource.slice(0, 600),
+            };
           }
-          await context.trace("translation.failed", { programId, attempts: loopResult.attempts, reason: loopResult.reason });
-          return { ok: false as const, programId, reason: loopResult.reason };
         },
         concurrency,
       );
 
       const translatedMethods: JavaMethodTranslation[] = [];
       const failedTranslations: string[] = [];
+      const translationFailures: AssemblyMigrationState["translationFailures"] = [];
 
       for (const result of slotResults) {
         if (!result) continue;
@@ -57,24 +73,27 @@ export function buildTranslateSubprogramsNode(
           translatedMethods.push(result.method);
         } else {
           failedTranslations.push(result.programId);
+          translationFailures.push({
+            programId: result.programId,
+            cobolSnippet: result.cobolSnippet,
+            failureReasons: result.failureReasons,
+            ...(result.lastAttemptBody ? { lastAttemptBody: result.lastAttemptBody } : {}),
+          });
         }
       }
 
-      await context.trace("translate.complete", {
-        translated: translatedMethods.length,
-        failed: failedTranslations.length,
-      });
+      await context.trace("translate.complete", { translated: translatedMethods.length, failed: failedTranslations.length });
 
       if (translatedMethods.length === 0) {
         return {
-          state: { ...state, translatedMethods, failedTranslations, status: "FAILED", failureReason: "All subprogram translations failed" },
+          state: { ...state, translatedMethods, failedTranslations, translationFailures, status: "FAILED", failureReason: "All subprogram translations failed" },
           next: "reportAssembly",
           status: "SUCCEEDED",
         };
       }
 
       return {
-        state: { ...state, translatedMethods, failedTranslations, status: "TRANSLATING" },
+        state: { ...state, translatedMethods, failedTranslations, translationFailures, status: "TRANSLATING" },
         next: "assembleProgram",
         status: "SUCCEEDED",
       };

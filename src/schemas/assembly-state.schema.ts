@@ -47,6 +47,9 @@ export const assemblyMigrationStateSchema = z.object({
   outputDir: z.string().min(1),
   outputClassName: z.string().regex(/^[A-Za-z_$][A-Za-z\d_$]*/),
 
+  /** Rules injected by the meta-loop from previous rounds */
+  injectedSkillRules: z.string().default(""),
+
   cobFiles: z.array(z.string()).default([]),
   cpyFiles: z.array(z.string()).default([]),
   subprograms: z.array(subprogramInfoSchema).default([]),
@@ -55,6 +58,14 @@ export const assemblyMigrationStateSchema = z.object({
 
   translatedMethods: z.array(javaMethodTranslationSchema).default([]),
   failedTranslations: z.array(z.string()).default([]),  // programIds that exhausted attempts
+
+  /** Per-failure detail for the SkillImprover */
+  translationFailures: z.array(z.object({
+    programId: z.string(),
+    cobolSnippet: z.string(),
+    failureReasons: z.array(z.string()),
+    lastAttemptBody: z.string().optional(),
+  })).default([]),
 
   assembledSource: z.string().optional(),
   assembledFilePath: z.string().optional(),

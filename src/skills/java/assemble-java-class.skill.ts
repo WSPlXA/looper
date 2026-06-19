@@ -1,4 +1,5 @@
 import type { JavaMethodTranslation } from "../../schemas/assembly-state.schema.js";
+import { countNetBraces } from "./count-net-braces.skill.js";
 
 // Match: // TODO call PROGRAM-ID(args) — handles nested parens in args via greedy .*
 // Anchored to end-of-line so (.*) captures everything up to the last ) on the line.
@@ -77,8 +78,12 @@ export function assembleJavaClass(
     // +1 because line numbers are 1-based and we haven't pushed this line yet
     methodLineStarts[m.methodName] = lines.length + 1;
     lines.push(signatureLine);
-    const resolved = sanitizeBody(resolveCallPlaceholders(m.body, methodMap));
-    lines.push(indentLines(resolved, "        "));
+    const resolvedBody = sanitizeBody(resolveCallPlaceholders(m.body, methodMap));
+    const net = countNetBraces(resolvedBody);
+    const safeBody = net === 0
+      ? resolvedBody
+      : `        // WARNING: body had unbalanced braces (net ${net > 0 ? "+" : ""}${net}) — body suppressed\n        throw new UnsupportedOperationException("${m.methodName}: translation produced unbalanced braces");`;
+    lines.push(net === 0 ? indentLines(resolvedBody, "        ") : safeBody);
     lines.push("    }");
   }
 

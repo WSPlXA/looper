@@ -61,6 +61,7 @@ export async function runCobolCallGraphToJavaWorkflow(
     outputClassName: string;
     maxTranslationAttempts?: number;
     maxRepairAttempts?: number;
+    injectedSkillRules?: string;
   },
   dependencies: {
     model: ModelClient;
@@ -91,6 +92,7 @@ export async function runCobolCallGraphToJavaWorkflow(
     status: "CREATED",
     maxTranslationAttempts: input.maxTranslationAttempts ?? 3,
     maxRepairAttempts,
+    injectedSkillRules: input.injectedSkillRules ?? "",
   });
 
   const javac = buildJavacTool(dependencies.javacTimeoutMs);

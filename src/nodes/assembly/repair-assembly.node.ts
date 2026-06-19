@@ -93,7 +93,7 @@ export function buildRepairAssemblyNode(
           context.trace,
           "model.call",
           { operation: "retranslateSubprogram", programId },
-          () => runSubprogramTranslationLoop(subprogram, "", deps.model, state.maxTranslationAttempts, errorContext),
+          () => runSubprogramTranslationLoop(subprogram, "", deps.model, state.maxTranslationAttempts, state.injectedSkillRules, errorContext),
         );
 
         if (loopResult.ok) {
@@ -105,7 +105,7 @@ export function buildRepairAssemblyNode(
           updatedMethods.set(programId, updated);
           await context.trace("repair.retranslated", { programId });
         } else {
-          await context.trace("repair.retranslation-failed", { programId, reason: loopResult.reason });
+          await context.trace("repair.retranslation-failed", { programId, reasons: loopResult.failureReasons });
         }
       }
 
