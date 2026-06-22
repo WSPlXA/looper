@@ -59,6 +59,8 @@ describe("Spring Boot multi-class project assembler", () => {
       .toContain("@SpringBootApplication");
     expect(files.get("src/main/java/generated/cobolcraft/runtime/CobolRuntimeState.java"))
       .toContain("protected static int[] counters = new int[1000];");
+    expect(files.get("src/main/java/generated/cobolcraft/runtime/Pointer.java"))
+      .toContain("public record Pointer(long address)");
 
     const hello = files.get("src/main/java/generated/cobolcraft/programs/HelloProgram.java");
     const formatName = files.get("src/main/java/generated/cobolcraft/programs/FormatNameProgram.java");

@@ -32,10 +32,10 @@ export type FieldDeclaration = {
 /** Extract all line numbers mentioned in javac stderr (locale-independent). */
 function parseErrorLineNumbers(stderr: string): Set<number> {
   const lines = new Set<number>();
-  const re = /\.java:(\d+):/g;
+  const re = /\.java:(?:\[(\d+),\d+\]|(\d+):)/g;
   let m;
   while ((m = re.exec(stderr)) !== null) {
-    const raw = m[1];
+    const raw = m[1] ?? m[2];
     if (raw !== undefined) lines.add(parseInt(raw));
   }
   return lines;

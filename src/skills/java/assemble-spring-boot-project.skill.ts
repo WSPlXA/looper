@@ -164,6 +164,15 @@ ${stateFields.length > 0 ? stateFields.map(field => `    ${field}`).join("\n") :
 }
 `,
   });
+  files.push({
+    relativePath: `${sourceRoot}/runtime/Pointer.java`,
+    content: `package ${input.packageName}.runtime;
+
+public record Pointer(long address) {
+    public static final Pointer NULL = new Pointer(0L);
+}
+`,
+  });
 
   for (const method of methods) {
     const className = classNameByProgram.get(method.programId.toUpperCase())!;
@@ -182,6 +191,7 @@ ${stateFields.length > 0 ? stateFields.map(field => `    ${field}`).join("\n") :
 
 import ${input.packageName}.runtime.CobolRuntime;
 import ${input.packageName}.runtime.CobolRuntimeState;
+import ${input.packageName}.runtime.Pointer;
 
 public final class ${className} extends CobolRuntimeState {
     private final CobolRuntime runtime;

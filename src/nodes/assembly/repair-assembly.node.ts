@@ -5,6 +5,8 @@ import { declareClassFields } from "../../skills/java/declare-class-fields.skill
 import { runTracedCall } from "../../core/trace/traced-call.js";
 import type { AssemblyGraphDependencies } from "./assembly-node.dependencies.js";
 import { writeAssembledOutput } from "./assemble-output.js";
+import { readTextFileTool } from "../../tools/filesystem.tool.js";
+import { basename } from "node:path";
 
 /** Parse javac stderr → set of 1-based line numbers that have errors */
 function parseErrorLines(stderr: string): Set<number> {
@@ -57,6 +59,11 @@ function findFailingSpringPrograms(
   return failing;
 }
 
+function compilerErrorsForFile(stderr: string, filePath: string): string {
+  const fileName = basename(filePath).toLowerCase();
+  return stderr.split("\n").filter(line => line.toLowerCase().includes(fileName)).join("\n");
+}
+
 export function buildRepairAssemblyNode(
   deps: Pick<AssemblyGraphDependencies, "model">,
 ): GraphNode<AssemblyMigrationState> {
@@ -87,9 +94,21 @@ export function buildRepairAssemblyNode(
       // Detect undeclared symbols (COBOL EXTERNAL / shared WORKING-STORAGE) and
       // declare them as class fields. This fixes "cannot find symbol" errors that
       // re-translation cannot fix because the symbol lives in another method's scope.
-      const { addedFields } = isSpringProject
-        ? { addedFields: [] }
-        : declareClassFields(state.assembledSource ?? "", lastAttempt.stderr);
+      const inferredFields = [];
+      if (isSpringProject) {
+        for (const programId of failingSpringProgramIds) {
+          const filePath = state.programFilePaths[programId];
+          if (!filePath) continue;
+          const source = await readTextFileTool.execute({ path: filePath });
+          inferredFields.push(...declareClassFields(
+            source,
+            compilerErrorsForFile(lastAttempt.stderr, filePath),
+          ).addedFields);
+        }
+      } else {
+        inferredFields.push(...declareClassFields(state.assembledSource ?? "", lastAttempt.stderr).addedFields);
+      }
+      const addedFields = inferredFields;
       const extraClassFieldDeclarations = [
         ...state.extraClassFieldDeclarations,
         ...addedFields
