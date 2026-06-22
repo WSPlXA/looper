@@ -1,9 +1,6 @@
-import { join } from "node:path";
 import type { GraphNode } from "../../core/graph/graph.node.js";
 import type { AssemblyMigrationState } from "../../schemas/assembly-state.schema.js";
-import { assembleJavaClass } from "../../skills/java/assemble-java-class.skill.js";
-import { writeTextFileTool } from "../../tools/filesystem.tool.js";
-import { runTracedCall } from "../../core/trace/traced-call.js";
+import { writeAssembledOutput } from "./assemble-output.js";
 
 export const assembleProgramNode: GraphNode<AssemblyMigrationState> = {
   name: "assembleProgram",
@@ -19,35 +16,21 @@ export const assembleProgramNode: GraphNode<AssemblyMigrationState> = {
       entryProgramId,
     });
 
-    const { source, methodLineStarts } = assembleJavaClass(
-      state.outputClassName,
-      entryProgramId,
-      state.translatedMethods,
-      state.failedTranslations,
-      state.extraClassFieldDeclarations,
-    );
-
-    const outputDir = join(state.runDir, "output");
-    const assembledFilePath = join(outputDir, `${state.outputClassName}.java`);
-
-    await runTracedCall(
-      context.trace,
-      "tool.call",
-      { tool: "write-text-file", path: assembledFilePath },
-      () => writeTextFileTool.execute({ path: assembledFilePath, content: source }),
-    );
+    const assembled = await writeAssembledOutput(state, context);
 
     await context.trace("assemble.complete", {
-      bytes: Buffer.byteLength(source, "utf-8"),
-      methodCount: Object.keys(methodLineStarts).length,
+      bytes: assembled.generatedSourceFiles.length === 1
+        ? Buffer.byteLength(assembled.assembledSource, "utf-8")
+        : undefined,
+      generatedFiles: assembled.generatedSourceFiles.length,
+      methodCount: state.translatedMethods.length,
+      targetProfile: state.targetProfile,
     });
 
     return {
       state: {
         ...state,
-        assembledSource: source,
-        assembledFilePath,
-        assembledMethodRanges: methodLineStarts,
+        ...assembled,
         status: "ASSEMBLING",
       },
       next: "compileAssembly",

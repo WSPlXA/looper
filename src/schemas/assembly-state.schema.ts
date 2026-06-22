@@ -46,6 +46,10 @@ export const assemblyMigrationStateSchema = z.object({
   sourceDir: z.string().min(1),
   outputDir: z.string().min(1),
   outputClassName: z.string().regex(/^[A-Za-z_$][A-Za-z\d_$]*/),
+  targetProfile: z.enum(["plain-java-single-class-v1", "spring-boot-multi-class-v1"])
+    .default("plain-java-single-class-v1"),
+  targetPackage: z.string().default("generated.cobol"),
+  springBootVersion: z.string().default("3.4.5"),
 
   /** Rules injected by the meta-loop from previous rounds */
   injectedSkillRules: z.string().default(""),
@@ -71,6 +75,9 @@ export const assemblyMigrationStateSchema = z.object({
   assembledFilePath: z.string().optional(),
   /** methodName → 1-based line number of the method signature in the assembled file */
   assembledMethodRanges: z.record(z.number()).optional(),
+  generatedProjectDir: z.string().optional(),
+  generatedSourceFiles: z.array(z.string()).default([]),
+  programFilePaths: z.record(z.string()).default({}),
   /** Field declarations accumulated across repair rounds for undeclared symbols */
   extraClassFieldDeclarations: z.array(z.string()).default([]),
 
@@ -78,7 +85,7 @@ export const assemblyMigrationStateSchema = z.object({
 
   status: z.enum([
     "CREATED", "SCANNING", "EXPANDING", "EXTRACTING",
-    "TRANSLATING", "ASSEMBLING", "COMPILING", "REPAIRING",
+    "TRANSLATING", "ASSEMBLING", "COMPILING", "COMPILE_PASSED", "VERIFYING", "REPAIRING",
     "SUCCESS", "FAILED",
   ]),
 
@@ -89,6 +96,13 @@ export const assemblyMigrationStateSchema = z.object({
     errorClass: z.string(),
     summary: z.string(),
     repairHint: z.string(),
+  }).optional(),
+
+  verification: z.object({
+    compilePassed: z.boolean(),
+    generatedFilesPresent: z.boolean(),
+    programFileCountMatches: z.boolean(),
+    reason: z.string(),
   }).optional(),
 
   failureReason: z.string().optional(),

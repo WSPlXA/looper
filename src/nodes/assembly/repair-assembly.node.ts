@@ -1,11 +1,10 @@
 import type { GraphNode } from "../../core/graph/graph.node.js";
 import type { JavaMethodTranslation, AssemblyMigrationState } from "../../schemas/assembly-state.schema.js";
 import { runSubprogramTranslationLoop } from "../../loops/subprogram-translation.loop.js";
-import { assembleJavaClass } from "../../skills/java/assemble-java-class.skill.js";
 import { declareClassFields } from "../../skills/java/declare-class-fields.skill.js";
-import { writeTextFileTool } from "../../tools/filesystem.tool.js";
 import { runTracedCall } from "../../core/trace/traced-call.js";
 import type { AssemblyGraphDependencies } from "./assembly-node.dependencies.js";
+import { writeAssembledOutput } from "./assemble-output.js";
 
 /** Parse javac stderr → set of 1-based line numbers that have errors */
 function parseErrorLines(stderr: string): Set<number> {
@@ -42,6 +41,22 @@ function findFailingMethods(
   return failing;
 }
 
+function findFailingSpringPrograms(
+  stderr: string,
+  programFilePaths: Readonly<Record<string, string>>,
+): Set<string> {
+  const normalizedError = stderr.replaceAll("\\", "/").toLowerCase();
+  const failing = new Set<string>();
+  for (const [programId, filePath] of Object.entries(programFilePaths)) {
+    const normalizedPath = filePath.replaceAll("\\", "/").toLowerCase();
+    const fileName = normalizedPath.slice(normalizedPath.lastIndexOf("/") + 1);
+    if (normalizedError.includes(normalizedPath) || normalizedError.includes(fileName)) {
+      failing.add(programId);
+    }
+  }
+  return failing;
+}
+
 export function buildRepairAssemblyNode(
   deps: Pick<AssemblyGraphDependencies, "model">,
 ): GraphNode<AssemblyMigrationState> {
@@ -49,26 +64,32 @@ export function buildRepairAssemblyNode(
     name: "repairAssembly",
     async run(state, context) {
       const lastAttempt = state.compileAttempts.at(-1);
-      if (!lastAttempt || !state.assembledFilePath || !state.assembledMethodRanges) {
-        throw new Error("repairAssembly: missing compile attempt or method ranges in state");
+      if (!lastAttempt || !state.assembledFilePath) {
+        throw new Error("repairAssembly: missing compile attempt or assembled output in state");
       }
 
       const errorLines = parseErrorLines(lastAttempt.stderr);
-      const failingMethodNames = findFailingMethods(errorLines, state.assembledMethodRanges);
+      const isSpringProject = state.targetProfile === "spring-boot-multi-class-v1";
+      const failingMethodNames = isSpringProject
+        ? new Set<string>()
+        : findFailingMethods(errorLines, state.assembledMethodRanges ?? {});
+      const failingSpringProgramIds = isSpringProject
+        ? findFailingSpringPrograms(lastAttempt.stderr, state.programFilePaths)
+        : new Set<string>();
 
       await context.trace("repair.start", {
         errorLineCount: errorLines.size,
         failingMethods: [...failingMethodNames],
+        failingPrograms: [...failingSpringProgramIds],
       });
 
       // ── Pass 1: structural repair ────────────────────────────────────────────
       // Detect undeclared symbols (COBOL EXTERNAL / shared WORKING-STORAGE) and
       // declare them as class fields. This fixes "cannot find symbol" errors that
       // re-translation cannot fix because the symbol lives in another method's scope.
-      const { addedFields } = declareClassFields(
-        state.assembledSource ?? "",
-        lastAttempt.stderr,
-      );
+      const { addedFields } = isSpringProject
+        ? { addedFields: [] }
+        : declareClassFields(state.assembledSource ?? "", lastAttempt.stderr);
       const extraClassFieldDeclarations = [
         ...state.extraClassFieldDeclarations,
         ...addedFields
@@ -91,6 +112,7 @@ export function buildRepairAssemblyNode(
 
       // Determine which programIds need re-translation
       const failingProgramIds = new Set<string>();
+      for (const programId of failingSpringProgramIds) failingProgramIds.add(programId);
       for (const methodName of failingMethodNames) {
         const programId = methodToProgramId.get(methodName);
         if (programId) failingProgramIds.add(programId);
@@ -137,25 +159,11 @@ export function buildRepairAssemblyNode(
         .map(id => updatedMethods.get(id))
         .filter((m): m is JavaMethodTranslation => m !== undefined);
 
-      // Re-assemble deterministically
-      const entryProgramId =
-        state.callOrder.at(-1) ??
-        translatedMethods.at(-1)?.programId ??
-        state.outputClassName;
-
-      const { source: newSource, methodLineStarts } = assembleJavaClass(
-        state.outputClassName,
-        entryProgramId,
+      const assembled = await writeAssembledOutput(
+        state,
+        context,
         translatedMethods,
-        state.failedTranslations,
         extraClassFieldDeclarations,
-      );
-
-      await runTracedCall(
-        context.trace,
-        "tool.call",
-        { tool: "write-text-file", path: state.assembledFilePath },
-        () => writeTextFileTool.execute({ path: state.assembledFilePath!, content: newSource }),
       );
 
       // Mark last compile attempt with repair notes
@@ -171,8 +179,7 @@ export function buildRepairAssemblyNode(
           ...stateWithoutPending,
           translatedMethods,
           extraClassFieldDeclarations,
-          assembledSource: newSource,
-          assembledMethodRanges: methodLineStarts,
+          ...assembled,
           compileAttempts: updatedAttempts,
           status: "REPAIRING",
         },

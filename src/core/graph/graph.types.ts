@@ -22,6 +22,7 @@ export type GraphNodeName =
   | "translateSubprograms"
   | "assembleProgram"
   | "compileAssembly"
+  | "verifyAssembly"
   | "classifyAssemblyError"
   | "repairAssembly"
   | "reportAssembly";

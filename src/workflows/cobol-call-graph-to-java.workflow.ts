@@ -10,6 +10,7 @@ import { buildFileCheckpointStore } from "../core/checkpoint/file-checkpoint.sto
 import { buildTraceLogger } from "../core/trace/trace-logger.js";
 import { assemblyMigrationStateSchema, type AssemblyMigrationState } from "../schemas/assembly-state.schema.js";
 import { buildJavacTool } from "../tools/javac.tool.js";
+import { buildMavenTestTool } from "../tools/maven.tool.js";
 import type { AssemblyGraphDependencies } from "../nodes/assembly/assembly-node.dependencies.js";
 import { scanSubprogramsNode } from "../nodes/assembly/scan-subprograms.node.js";
 import { expandCopybooksNode } from "../nodes/assembly/expand-copybooks.node.js";
@@ -17,6 +18,7 @@ import { extractCallGraphNode } from "../nodes/assembly/extract-call-graph.node.
 import { buildTranslateSubprogramsNode } from "../nodes/assembly/translate-subprograms.node.js";
 import { assembleProgramNode } from "../nodes/assembly/assemble-program.node.js";
 import { buildCompileAssemblyNode } from "../nodes/assembly/compile-assembly.node.js";
+import { verifyAssemblyNode } from "../nodes/assembly/verify-assembly.node.js";
 import { classifyAssemblyErrorNode } from "../nodes/assembly/classify-assembly-error.node.js";
 import { buildRepairAssemblyNode } from "../nodes/assembly/repair-assembly.node.js";
 import { reportAssemblyNode } from "../nodes/assembly/report-assembly.node.js";
@@ -41,6 +43,7 @@ function buildAssemblyNodes(
     translateSubprograms: buildTranslateSubprogramsNode(deps),
     assembleProgram: assembleProgramNode,
     compileAssembly: buildCompileAssemblyNode(deps),
+    verifyAssembly: verifyAssemblyNode,
     classifyAssemblyError: classifyAssemblyErrorNode,
     repairAssembly: buildRepairAssemblyNode(deps),
     reportAssembly: reportAssemblyNode,
@@ -49,9 +52,9 @@ function buildAssemblyNodes(
 
 // maxTransitions budget: translation loop is internal — each top-level node counts once.
 // scan → expand → extract → translate → assemble → (compile → classify → repair) * N → report
-// = 5 + 3 * maxRepairAttempts + 2 headroom
+// = 6 + 3 * maxRepairAttempts + headroom (includes deterministic verify)
 function calcMaxTransitions(maxRepairAttempts: number): number {
-  return 5 + 3 * maxRepairAttempts + 5;
+  return 6 + 3 * maxRepairAttempts + 5;
 }
 
 export async function runCobolCallGraphToJavaWorkflow(
@@ -62,11 +65,15 @@ export async function runCobolCallGraphToJavaWorkflow(
     maxTranslationAttempts?: number;
     maxRepairAttempts?: number;
     injectedSkillRules?: string;
+    targetProfile?: "plain-java-single-class-v1" | "spring-boot-multi-class-v1";
+    targetPackage?: string;
+    springBootVersion?: string;
   },
   dependencies: {
     model: ModelClient;
     runsDir?: string;
     javacTimeoutMs?: number;
+    mavenTimeoutMs?: number;
     translationConcurrency?: number;
   },
 ): Promise<CallGraphWorkflowResult> {
@@ -93,12 +100,17 @@ export async function runCobolCallGraphToJavaWorkflow(
     maxTranslationAttempts: input.maxTranslationAttempts ?? 3,
     maxRepairAttempts,
     injectedSkillRules: input.injectedSkillRules ?? "",
+    targetProfile: input.targetProfile ?? "plain-java-single-class-v1",
+    targetPackage: input.targetPackage ?? "generated.cobol",
+    springBootVersion: input.springBootVersion ?? "3.4.5",
   });
 
   const javac = buildJavacTool(dependencies.javacTimeoutMs);
+  const maven = buildMavenTestTool(dependencies.mavenTimeoutMs);
   const deps: AssemblyGraphDependencies = {
     model: dependencies.model,
     javac,
+    maven,
     ...(dependencies.translationConcurrency !== undefined ? { translationConcurrency: dependencies.translationConcurrency } : {}),
   };
   const context = { runId, stateStore, checkpointStore, trace };

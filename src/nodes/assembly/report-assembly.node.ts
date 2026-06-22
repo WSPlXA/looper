@@ -12,6 +12,8 @@ export const reportAssemblyNode: GraphNode<AssemblyMigrationState> = {
     const report = {
       runId: state.runId,
       outputClassName: state.outputClassName,
+      targetProfile: state.targetProfile,
+      targetPackage: state.targetPackage,
       sourceDir: state.sourceDir,
       status: state.status === "SUCCESS" ? "SUCCESS" : "FAILED",
       subprogramCount: state.subprograms.length,
@@ -20,6 +22,9 @@ export const reportAssemblyNode: GraphNode<AssemblyMigrationState> = {
       compileAttempts: state.compileAttempts.length,
       compilePassed: lastCompile?.success ?? false,
       assembledFilePath: state.assembledFilePath,
+      generatedProjectDir: state.generatedProjectDir,
+      generatedFileCount: state.generatedSourceFiles.length,
+      verification: state.verification,
       hasCycle: state.hasCycle,
       ...(state.failureReason ? { failureReason: state.failureReason } : {}),
       generatedAt: new Date().toISOString(),

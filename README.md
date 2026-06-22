@@ -80,6 +80,36 @@ npm test
 npm run migrate -- examples/cobol/HELLO.cob examples/output Hello 5
 ```
 
+生成 Spring Boot 多类项目：
+
+```powershell
+npm run migrate-program-spring -- <source-dir> <output-dir> <ClassName> `
+  [package] [translation-attempts] [repair-attempts] [concurrency] [spring-boot-version]
+```
+
+`spring-boot-multi-class-v1` 保留现有 call-graph translation loop，但替换最终组装和编译目标：
+
+- 每个成功翻译的 COBOL `PROGRAM-ID` 生成一个 final Java program class。
+- `CobolRuntime` 在启动时一次性创建 program dispatcher；program 之间通过直接 Java 调用跳转，不在 hot path 查询 Spring container。
+- 推断出的 COBOL `EXTERNAL` / shared `WORKING-STORAGE` 字段集中在 `CobolRuntimeState` 的单份 static storage 中，避免每个 program object 复制大型数组。
+- Spring Boot 只负责 application bootstrap 和 singleton runtime wiring。
+- 项目使用 `mvn test` 编译和测试；`CompileAssemblyNode` 只能产生 `COMPILE_PASSED`，随后 `VerifyAssemblyNode` 检查生成文件和 program-file 映射后才能产生 `SUCCESS`。
+- Maven 错误中的 Java 文件路径会映射回对应 `PROGRAM-ID`，repair loop 只重翻译失败文件。
+
+生成布局：
+
+```text
+<output-dir>/
+  pom.xml
+  src/main/java/<package>/
+    <ClassName>Application.java
+    runtime/CobolRuntime.java
+    runtime/CobolRuntimeState.java
+    programs/<ProgramId>Program.java
+```
+
+当前 Spring profile 是 single-runtime/single-tenant 布局。static COBOL state 降低对象密度并保持跨 program 共享语义，但不支持同 JVM 内多个隔离的迁移实例。若后续需要多租户，应改为每个 runtime 一份显式 state reference，并接受每次字段访问增加一次指针间接访问的成本。
+
 ## Docker 构建与测试 (Docker build and test)
 
 `test` 目标会在镜像构建期间安装 OpenJDK、构建 TypeScript 并执行完整的测试套件：

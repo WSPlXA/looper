@@ -23,7 +23,7 @@ const METHOD_LEVEL_MODIFIER_RE = /^( {8,})((?:(?:public|private|protected|static
 // Example: "        Given the complexity, I'll assume we are to translate..."
 const PROSE_LINE_RE = /^( {8,})([A-Z][a-zA-Z][^;{}()=\[\]<>@\n]{25,})\s*$/gm;
 
-function sanitizeBody(body: string): string {
+export function sanitizeJavaMethodBody(body: string): string {
   return body
     .replace(COMMENTED_IF_RE, (_, inner: string) => `if (false /* UNRESOLVED: ${inner.trim()} */)`)
     .replace(ASSIGN_COMMENT_RE, (_, varName: string, inner: string) => `${varName} = 0; /* UNRESOLVED: ${inner.trim()} */`)
@@ -31,11 +31,15 @@ function sanitizeBody(body: string): string {
     .replace(PROSE_LINE_RE, (_, indent: string, text: string) => `${indent}// [REASONING-STRIPPED] ${text.trim().slice(0, 80)}`);
 }
 
-function resolveCallPlaceholders(body: string, methodMap: Map<string, string>): string {
+export function resolveCallPlaceholders(
+  body: string,
+  methodMap: ReadonlyMap<string, string>,
+  qualifier = "",
+): string {
   return body.replace(TODO_CALL_RE, (_, programId: string, args: string) => {
     const methodName = methodMap.get(programId.toUpperCase());
     if (!methodName) return `/* UNRESOLVED: ${programId}(${args}) */`;
-    return `${methodName}(${args});`;
+    return `${qualifier}${methodName}(${args});`;
   });
 }
 
@@ -113,7 +117,7 @@ export function assembleJavaClass(
     // +1 because line numbers are 1-based and we haven't pushed this line yet
     methodLineStarts[m.methodName] = lines.length + 1;
     lines.push(signatureLine);
-    const resolvedBody = sanitizeBody(resolveCallPlaceholders(m.body, methodMap));
+    const resolvedBody = sanitizeJavaMethodBody(resolveCallPlaceholders(m.body, methodMap));
     const net = countNetBraces(resolvedBody);
     const safeBody = net === 0
       ? resolvedBody
