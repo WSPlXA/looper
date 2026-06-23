@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -62,6 +62,19 @@ describe("file session store", () => {
     const artifacts = buildWorkspaceArtifactStore(workspace);
     await expect(artifacts.saveJson("decisions/result.json", {})).rejects.toThrow(/symlink|escapes \.looper/);
     await expect(artifacts.loadJson("decisions/leak.json")).rejects.toThrow(/symlink|escapes \.looper/);
+  });
+
+  it("does not create directories outside .looper before rejecting nested symlink escapes", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "looper-session-"));
+    const outside = await mkdtemp(join(tmpdir(), "looper-outside-"));
+    await mkdir(join(workspace, ".looper"));
+    await symlink(outside, join(workspace, ".looper/link"), "dir");
+
+    const artifacts = buildWorkspaceArtifactStore(workspace);
+    await expect(artifacts.saveJson("link/nested/result.json", { ok: true })).rejects.toThrow(
+      /symlink|escapes \.looper/,
+    );
+    await expect(lstat(join(outside, "nested"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("uses unique temporary files for concurrent session saves", async () => {

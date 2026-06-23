@@ -50,6 +50,28 @@ export function buildWorkspaceArtifactStore(workspace: string): WorkspaceArtifac
     if (!isInsideRoot(realRoot, parent)) throw new Error("Artifact path escapes .looper through symlink");
   }
 
+  async function ensureParentDirectoryInsideRoot(realRoot: string, filePath: string): Promise<void> {
+    const parent = dirname(filePath);
+    const rel = relative(root, parent);
+    const segments = rel === "" ? [] : rel.split(sep);
+    let current = root;
+
+    for (const segment of segments) {
+      current = resolve(current, segment);
+      try {
+        const stats = await lstat(current);
+        if (stats.isSymbolicLink()) throw new Error("Artifact path escapes .looper through symlink");
+        if (!stats.isDirectory()) throw new Error("Artifact parent path is not a directory");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") break;
+        throw error;
+      }
+    }
+
+    await mkdir(parent, { recursive: true });
+    await assertParentInsideRoot(realRoot, filePath);
+  }
+
   async function assertFileIsNotSymlink(filePath: string): Promise<boolean> {
     try {
       const stats = await lstat(filePath);
@@ -67,8 +89,7 @@ export function buildWorkspaceArtifactStore(workspace: string): WorkspaceArtifac
       const serialized = JSON.stringify(value, null, 2);
       if (serialized === undefined) throw new Error("Artifact value must be valid JSON");
       const rootRealpath = await ensureRootRealpath();
-      await mkdir(dirname(filePath), { recursive: true });
-      await assertParentInsideRoot(rootRealpath, filePath);
+      await ensureParentDirectoryInsideRoot(rootRealpath, filePath);
       await assertFileIsNotSymlink(filePath);
       const temporary = `${filePath}.${randomUUID()}.tmp`;
       await writeFile(temporary, `${serialized}\n`, "utf8");
