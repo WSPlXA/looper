@@ -229,6 +229,23 @@ function withUpdatedSession(
   });
 }
 
+export function buildPauseTransition(
+  session: MigrationSession,
+  pausedAt: string,
+): { session: MigrationSession; alreadyPaused: boolean; metadata?: PauseMetadata } {
+  const paused = withUpdatedSession(session, { stage: "PAUSED" }, pausedAt);
+  if (session.stage === "PAUSED") return { session: paused, alreadyPaused: true };
+  return {
+    session: paused,
+    alreadyPaused: false,
+    metadata: {
+      sessionId: session.id,
+      pausedFromStage: session.stage,
+      pausedAt,
+    },
+  };
+}
+
 async function persistCriteria(workspace: string, session: MigrationSession, criteria: readonly Criterion[]): Promise<void> {
   await saveLooperText(workspace, "criteria.yaml", criteriaYaml(session, criteria));
 }
@@ -436,16 +453,10 @@ export async function startRepl(dependencies: ReplDependencies): Promise<void> {
           output.write(`${renderEvaluation(context.lastEvaluation)}\n`);
         } else if (command.name === "pause") {
           const pausedAt = (dependencies.clock ?? (() => new Date()))().toISOString();
-          await persistPauseMetadata(dependencies.workspace, {
-            sessionId: context.session.id,
-            pausedFromStage: context.session.stage,
-            pausedAt,
-          });
-          const paused = withUpdatedSession(context.session, {
-            stage: "PAUSED",
-          }, pausedAt);
-          await saveSession(paused);
-          output.write("Session saved as PAUSED.\n");
+          const transition = buildPauseTransition(context.session, pausedAt);
+          if (transition.metadata) await persistPauseMetadata(dependencies.workspace, transition.metadata);
+          await saveSession(transition.session);
+          output.write(transition.alreadyPaused ? "Session is already PAUSED.\n" : "Session saved as PAUSED.\n");
         } else if (command.name === "resume") {
           const loaded = await dependencies.sessionStore.load();
           if (!loaded) throw new Error("No saved session found");

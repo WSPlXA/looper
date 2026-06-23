@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseCliCommand } from "../../src/interfaces/cli/commands.js";
-import { parseMigrationPlanYaml } from "../../src/interfaces/cli/repl.js";
+import { buildPauseTransition, parseMigrationPlanYaml } from "../../src/interfaces/cli/repl.js";
 
 describe("terminal commands", () => {
   it.each([
@@ -31,5 +31,24 @@ describe("terminal commands", () => {
         allowedPaths: ["pom.xml", "skinny/**"],
       },
     ]);
+  });
+
+  it("does not replace the original stage on repeated pause", () => {
+    const alreadyPaused = buildPauseTransition({
+      id: "session-1",
+      workspace: "/tmp/work",
+      stage: "PAUSED",
+      iteration: 1,
+      criteriaRevision: 1,
+      approvedCriteriaRevision: 1,
+      scoreHistory: [],
+      completedTaskIds: [],
+      risks: [],
+      createdAt: "2026-06-23T00:00:00.000Z",
+      updatedAt: "2026-06-23T00:00:00.000Z",
+    }, "2026-06-23T00:01:00.000Z");
+
+    expect(alreadyPaused.metadata).toBeUndefined();
+    expect(alreadyPaused.session.stage).toBe("PAUSED");
   });
 });
