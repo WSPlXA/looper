@@ -60,14 +60,14 @@ function selectTask(session: MigrationSession, tasks: readonly MigrationTask[]):
 }
 
 function activeRepairScores(scoreHistory: MigrationSession["scoreHistory"]): number[] {
-  let lastPassedIndex = -1;
+  let streakStart = scoreHistory.length;
   for (let index = scoreHistory.length - 1; index >= 0; index--) {
-    if (scoreHistory[index]!.decision === "PASSED") {
-      lastPassedIndex = index;
+    if (scoreHistory[index]!.decision !== "FAILED") {
       break;
     }
+    streakStart = index;
   }
-  return scoreHistory.slice(lastPassedIndex + 1).map(entry => entry.score);
+  return scoreHistory.slice(streakStart).map(entry => entry.score);
 }
 
 export function buildMigrationLoop(dependencies: MigrationLoopDependencies): {

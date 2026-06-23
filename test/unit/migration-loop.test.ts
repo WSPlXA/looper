@@ -277,6 +277,39 @@ describe("migration loop", () => {
     });
   });
 
+  it("cuts the repair stop streak after a non-failed review decision", async () => {
+    const evidence = [
+      { criterionId: "build", passed: true, score: 70, confidence: 1, evidence: ["mvn.log"] },
+    ];
+    const { loop, task } = buildLoop(evidence, { maxRepairAttempts: 3 });
+
+    const result = await loop.runNext({
+      session: buildSession({
+        iteration: 3,
+        scoreHistory: [
+          { iteration: 1, score: 70, decision: "FAILED" },
+          { iteration: 2, score: 70, decision: "FAILED" },
+          { iteration: 3, score: 70, decision: "NEEDS_REVIEW" },
+        ],
+      }),
+      inventory: { sourceKind: "cobol", sourceRoot: "/tmp/work", programs: [], copybookFiles: [], risks: [] },
+      architectureDecision: approvedDecision,
+      tasks: [task],
+    });
+
+    expect(result.session).toMatchObject({
+      stage: "RUNNING",
+      iteration: 4,
+      activeTaskId: "task-1",
+      scoreHistory: [
+        { iteration: 1, score: 70, decision: "FAILED" },
+        { iteration: 2, score: 70, decision: "FAILED" },
+        { iteration: 3, score: 70, decision: "NEEDS_REVIEW" },
+        { iteration: 4, score: 70, decision: "FAILED" },
+      ],
+    });
+  });
+
   it("resumes the active task before choosing the first incomplete task", async () => {
     const execute = vi.fn().mockResolvedValue({ changedFiles: ["target/Task2.java"] });
     const loop = buildMigrationLoop({
