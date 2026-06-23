@@ -9,7 +9,7 @@ import type { CriterionEvidence } from "../../../core/criteria/criteria.types.js
 import { AppError } from "../../../core/errors/app-error.js";
 import type { ModelClient } from "../../../core/model/model-client.js";
 import type { Tool } from "../../../core/tool/tool.js";
-import { runSubprogramTranslationLoop } from "../../../loops/subprogram-translation.loop.js";
+import { runSubprogramTranslationLoop, type SubprogramTranslationQuality } from "../../../loops/subprogram-translation.loop.js";
 import { assembleHollowSkinnyProject, type HollowSkinnyPlugin } from "../../../profiles/hollow-skinny/assemble-hollow-skinny-project.js";
 import { verifyHollowSkinnyProject } from "../../../profiles/hollow-skinny/verify-hollow-skinny-project.js";
 import type { JavaMethodTranslation, SubprogramInfo } from "../../../schemas/assembly-state.schema.js";
@@ -29,6 +29,7 @@ type GeneratedProjectModel = {
   plugins: HollowSkinnyPlugin[];
   files: Array<{ relativePath: string; content: string }>;
   translations: Map<string, JavaMethodTranslation>;
+  qualities: Map<string, SubprogramTranslationQuality>;
   lastMavenResult?: CompileResult;
 };
 
@@ -112,6 +113,7 @@ export function buildSpringBootTargetAdapter(dependencies: Dependencies): Target
     plugins: [],
     files: [],
     translations: new Map(),
+    qualities: new Map(),
   };
 
   function assembleProject(): void {
@@ -177,6 +179,7 @@ export function buildSpringBootTargetAdapter(dependencies: Dependencies): Target
         attempts: translation.attempts,
       };
       state.translations.set(programId, fullTranslation);
+      state.qualities.set(programId, translation.quality);
       const plugin: HollowSkinnyPlugin = {
         programId,
         className: pluginClassName(programId),
@@ -216,6 +219,21 @@ export function buildSpringBootTargetAdapter(dependencies: Dependencies): Target
       const verificationEvidence = projectVerification.violations.length > 0
         ? projectVerification.violations
         : ["hollow/skinny verifier reported no violations"];
+      const qualities = [...state.qualities.entries()];
+      const averageCoverage = qualities.length === 0
+        ? 0
+        : qualities.reduce((sum, [, quality]) => sum + quality.coverage, 0) / qualities.length;
+      const semanticScore = Math.round(averageCoverage * 100);
+      const semanticEvidence = qualities.length === 0
+        ? ["translated program count: 0"]
+        : [
+          `translated program count: ${qualities.length}`,
+          `average deterministic coverage: ${semanticScore}`,
+          ...qualities.flatMap(([programId, quality]) => [
+            `${programId} evaluator: ${quality.evaluatorPassed ? "passed" : "failed"} - ${quality.evaluatorReason}`,
+            ...quality.coverageEvidence.map(item => `${programId} ${item}`),
+          ]),
+        ];
 
       return [
         byCriterionId(dependencies.profile, "build.hollow", {
@@ -243,35 +261,32 @@ export function buildSpringBootTargetAdapter(dependencies: Dependencies): Target
           ],
         }),
         byCriterionId(dependencies.profile, "semantic.fidelity", {
-          passed: state.plugins.length > 0,
-          score: state.plugins.length > 0 ? 1 : 0,
+          passed: state.translations.size > 0 && semanticScore >= 80,
+          score: semanticScore,
           confidence: 1,
-          evidence: [
-            "Deterministic fallback: subprogram translation loop exposes pass/fail and attempts, but no semantic evaluator coverage metric.",
-            `translated plugin count: ${state.plugins.length}`,
-          ],
+          evidence: semanticEvidence,
         }),
         byCriterionId(dependencies.profile, "build.tests", {
           passed: mavenResult.success,
-          score: mavenResult.success ? 1 : 0,
+          score: mavenResult.success ? 100 : 0,
           confidence: 1,
           evidence: buildEvidence,
         }),
         byCriterionId(dependencies.profile, "architecture.conformance", {
           passed: projectVerification.passed,
-          score: projectVerification.passed ? 1 : 0,
+          score: projectVerification.passed ? 100 : 0,
           confidence: 1,
           evidence: verificationEvidence,
         }),
         byCriterionId(dependencies.profile, "code.maintainability", {
           passed: projectVerification.passed,
-          score: projectVerification.passed ? 1 : 0,
+          score: projectVerification.passed ? 100 : 0,
           confidence: 1,
           evidence: ["Generated project uses one skinny plugin class per COBOL program and shared hollow contracts."],
         }),
         byCriterionId(dependencies.profile, "evidence.completeness", {
           passed: state.files.length > 0 && state.plugins.length > 0,
-          score: state.files.length > 0 && state.plugins.length > 0 ? 1 : 0,
+          score: state.files.length > 0 && state.plugins.length > 0 ? 100 : 0,
           confidence: 1,
           evidence: [
             `generated files: ${state.files.length}`,

@@ -82,8 +82,65 @@ function buildSubprogramTranslationLoop(model: ModelClient, maxAttempts: number)
 }
 
 export type SubprogramTranslationResult =
-  | { ok: true; method: Omit<JavaMethodTranslation, "programId" | "attempts">; attempts: number }
+  | { ok: true; method: Omit<JavaMethodTranslation, "programId" | "attempts">; attempts: number; quality: SubprogramTranslationQuality }
   | { ok: false; attempts: number; failureReasons: string[]; lastAttemptBody?: string };
+
+export type SubprogramTranslationQuality = {
+  evaluatorPassed: boolean;
+  evaluatorReason: string;
+  coverage: number;
+  coverageEvidence: string[];
+};
+
+function clampCoverage(value: number): number {
+  if (Number.isNaN(value)) return 0;
+  return Math.max(0, Math.min(1, value));
+}
+
+function measureTranslationCoverage(
+  subprogram: SubprogramInfo,
+  method: Omit<JavaMethodTranslation, "programId" | "attempts">,
+): Pick<SubprogramTranslationQuality, "coverage" | "coverageEvidence"> {
+  const components: Array<{ name: string; score: number; evidence: string }> = [];
+  const body = method.body.trim();
+  components.push({
+    name: "executable body",
+    score: body.length > 0 ? 1 : 0,
+    evidence: `executable body non-empty: ${body.length > 0}`,
+  });
+
+  const expectedParams = subprogram.linkageParams.length;
+  const paramScore = expectedParams === 0
+    ? (method.params.length === 0 ? 1 : 0)
+    : Math.min(method.params.length, expectedParams) / expectedParams;
+  components.push({
+    name: "linkage params",
+    score: method.params.length === expectedParams ? 1 : clampCoverage(paramScore),
+    evidence: `linkage params matched: ${method.params.length}/${expectedParams}`,
+  });
+
+  const lowerBody = body.toLowerCase();
+  const mentionedCallees = subprogram.callees.filter(callee => lowerBody.includes(callee.toLowerCase()));
+  const callCoverage = subprogram.callees.length === 0
+    ? 1
+    : mentionedCallees.length / subprogram.callees.length;
+  components.push({
+    name: "CALL targets",
+    score: clampCoverage(callCoverage),
+    evidence: subprogram.callees.length === 0
+      ? "CALL target coverage: no callees"
+      : `CALL target coverage: ${mentionedCallees.length}/${subprogram.callees.length} (${mentionedCallees.join(", ") || "none"})`,
+  });
+
+  const coverage = clampCoverage(components.reduce((sum, component) => sum + component.score, 0) / components.length);
+  return {
+    coverage,
+    coverageEvidence: [
+      `coverage components: ${components.map(component => `${component.name}=${component.score.toFixed(2)}`).join(", ")}`,
+      ...components.map(component => component.evidence),
+    ],
+  };
+}
 
 export async function runSubprogramTranslationLoop(
   subprogram: SubprogramInfo,
@@ -107,7 +164,17 @@ export async function runSubprogramTranslationLoop(
   });
 
   if (stopped === "PASSED" && state.result) {
-    return { ok: true, method: state.result, attempts };
+    const coverage = measureTranslationCoverage(subprogram, state.result);
+    return {
+      ok: true,
+      method: state.result,
+      attempts,
+      quality: {
+        evaluatorPassed: evaluation.passed,
+        evaluatorReason: evaluation.reason,
+        ...coverage,
+      },
+    };
   }
   return {
     ok: false,

@@ -106,6 +106,10 @@ describe("Spring Boot target adapter", () => {
 
     expect(maven.execute).toHaveBeenCalledWith({ projectDir: outputDir });
     expect(evidence.find(item => item.criterionId === "architecture.plugin-loads")?.passed).toBe(true);
+    const semanticEvidence = evidence.find(item => item.criterionId === "semantic.fidelity");
+    expect(semanticEvidence?.score).toBe(100);
+    expect(semanticEvidence?.evidence.join("\n")).not.toContain("fallback");
+    expect(evidence.find(item => item.criterionId === "build.tests")?.score).toBe(100);
     expect(evidence).toEqual(expect.arrayContaining(
       hollowSkinnyProfile.criteria.map(criterion => expect.objectContaining({ criterionId: criterion.id })),
     ));
