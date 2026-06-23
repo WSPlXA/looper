@@ -47,6 +47,29 @@ function nextStage(input: {
   return "RUNNING";
 }
 
+function selectTask(session: MigrationSession, tasks: readonly MigrationTask[]): MigrationTask | undefined {
+  const completedTaskIds = new Set(session.completedTaskIds);
+
+  if (session.activeTaskId && !completedTaskIds.has(session.activeTaskId)) {
+    const activeTask = tasks.find(candidate => candidate.id === session.activeTaskId);
+    if (!activeTask) throw new Error(`Active task ${session.activeTaskId} is not available`);
+    return activeTask;
+  }
+
+  return tasks.find(candidate => !completedTaskIds.has(candidate.id));
+}
+
+function activeRepairScores(scoreHistory: MigrationSession["scoreHistory"]): number[] {
+  let lastPassedIndex = -1;
+  for (let index = scoreHistory.length - 1; index >= 0; index--) {
+    if (scoreHistory[index]!.decision === "PASSED") {
+      lastPassedIndex = index;
+      break;
+    }
+  }
+  return scoreHistory.slice(lastPassedIndex + 1).map(entry => entry.score);
+}
+
 export function buildMigrationLoop(dependencies: MigrationLoopDependencies): {
   runNext(context: MigrationLoopContext): Promise<MigrationLoopContext>;
 } {
@@ -61,7 +84,7 @@ export function buildMigrationLoop(dependencies: MigrationLoopDependencies): {
       const tasks = context.tasks.length > 0
         ? context.tasks
         : await dependencies.target.plan(context.inventory, context.architectureDecision!);
-      const task = tasks.find(candidate => !context.session.completedTaskIds.includes(candidate.id));
+      const task = selectTask(context.session, tasks);
 
       if (!task) {
         const completedSession: MigrationSession = {
@@ -75,6 +98,11 @@ export function buildMigrationLoop(dependencies: MigrationLoopDependencies): {
           session: completedSession,
           tasks,
         };
+        await dependencies.checkpointStore.save(completedSession.id, "session-completed", completedContext);
+        await dependencies.trace("session.completed", {
+          sessionId: completedSession.id,
+          completedTaskIds: completedSession.completedTaskIds,
+        });
         await dependencies.sessionStore.save(completedSession);
         return completedContext;
       }
@@ -87,7 +115,7 @@ export function buildMigrationLoop(dependencies: MigrationLoopDependencies): {
         ...context.session.scoreHistory,
         { iteration, score: evaluation.score, decision: evaluation.decision },
       ];
-      const scores = scoreHistory.map(score => score.score);
+      const scores = activeRepairScores(scoreHistory);
       const exhausted = evaluation.decision === "FAILED" && shouldStopRepair({
         attempt: scores.length,
         maxAttempts: dependencies.maxRepairAttempts,
@@ -117,7 +145,6 @@ export function buildMigrationLoop(dependencies: MigrationLoopDependencies): {
       const iterationId = `iteration-${iteration}`;
       const artifactPath = `evidence/iteration-${formatIteration(iteration)}.json`;
 
-      await dependencies.sessionStore.save(session);
       await dependencies.artifacts.saveJson(artifactPath, {
         sessionId: session.id,
         iteration,
@@ -132,6 +159,7 @@ export function buildMigrationLoop(dependencies: MigrationLoopDependencies): {
         taskId: task.id,
         evaluation,
       });
+      await dependencies.sessionStore.save(session);
 
       return nextContext;
     },

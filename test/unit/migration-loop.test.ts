@@ -29,9 +29,12 @@ function buildSession(overrides: Partial<MigrationSession> = {}): MigrationSessi
   };
 }
 
-function buildLoop(evidence: CriterionEvidence[], overrides: { maxRepairAttempts?: number } = {}) {
+function buildLoop(evidence: CriterionEvidence[], overrides: {
+  maxRepairAttempts?: number;
+  artifactSave?: ReturnType<typeof vi.fn>;
+} = {}) {
   const sessionSave = vi.fn();
-  const artifactSave = vi.fn();
+  const artifactSave = overrides.artifactSave ?? vi.fn();
   const checkpointSave = vi.fn();
   const trace = vi.fn();
   const task = { id: "task-1", programIds: ["MAIN"], allowedPaths: ["target/**"] };
@@ -164,6 +167,26 @@ describe("migration loop", () => {
     });
   });
 
+  it("does not persist the advanced session when evidence artifact write fails", async () => {
+    const evidence = [
+      { criterionId: "build", passed: true, score: 100, confidence: 1, evidence: ["mvn.log"] },
+    ];
+    const artifactSave = vi.fn().mockRejectedValue(new Error("disk full"));
+    const { loop, sessionSave, checkpointSave, trace } = buildLoop(evidence, { artifactSave });
+
+    await expect(loop.runNext({
+      session: buildSession(),
+      inventory: { sourceKind: "cobol", sourceRoot: "/tmp/work", programs: [], copybookFiles: [], risks: [] },
+      architectureDecision: approvedDecision,
+      tasks: [],
+    })).rejects.toThrow("disk full");
+
+    expect(artifactSave).toHaveBeenCalledWith("evidence/iteration-000001.json", expect.any(Object));
+    expect(sessionSave).not.toHaveBeenCalled();
+    expect(checkpointSave).not.toHaveBeenCalled();
+    expect(trace).not.toHaveBeenCalled();
+  });
+
   it("blocks when three failed scores stagnate across the configured window", async () => {
     const evidence = [
       { criterionId: "build", passed: true, score: 70, confidence: 1, evidence: ["mvn.log"] },
@@ -225,6 +248,98 @@ describe("migration loop", () => {
     });
   });
 
+  it("does not let a completed task repair streak block the next task", async () => {
+    const evidence = [
+      { criterionId: "build", passed: true, score: 70, confidence: 1, evidence: ["mvn.log"] },
+    ];
+    const { loop, task } = buildLoop(evidence, { maxRepairAttempts: 3 });
+
+    const result = await loop.runNext({
+      session: buildSession({
+        iteration: 3,
+        scoreHistory: [
+          { iteration: 1, score: 70, decision: "FAILED" },
+          { iteration: 2, score: 70, decision: "FAILED" },
+          { iteration: 3, score: 100, decision: "PASSED" },
+        ],
+        completedTaskIds: ["previous-task"],
+      }),
+      inventory: { sourceKind: "cobol", sourceRoot: "/tmp/work", programs: [], copybookFiles: [], risks: [] },
+      architectureDecision: approvedDecision,
+      tasks: [task],
+    });
+
+    expect(result.session).toMatchObject({
+      stage: "RUNNING",
+      iteration: 4,
+      activeTaskId: "task-1",
+      completedTaskIds: ["previous-task"],
+    });
+  });
+
+  it("resumes the active task before choosing the first incomplete task", async () => {
+    const execute = vi.fn().mockResolvedValue({ changedFiles: ["target/Task2.java"] });
+    const loop = buildMigrationLoop({
+      sessionStore: { load: vi.fn(), save: vi.fn() },
+      source: { id: "cobol", discover: vi.fn() },
+      target: {
+        id: "spring-boot",
+        plan: vi.fn(),
+        execute,
+        verify: vi.fn().mockResolvedValue([
+          { criterionId: "build", passed: true, score: 100, confidence: 1, evidence: ["mvn.log"] },
+        ]),
+      },
+      criteria: [{ id: "build", kind: "SCORE", category: "BUILD", weight: 100, requiredConfidence: 1 }],
+      passThreshold: 90,
+      maxRepairAttempts: 3,
+      maxStagnantIterations: 2,
+      checkpointStore: { save: vi.fn(), loadLatest: vi.fn() },
+      artifacts: { saveJson: vi.fn(), loadJson: vi.fn() },
+      trace: vi.fn(),
+    });
+    const task1 = { id: "task-1", programIds: ["MAIN"], allowedPaths: ["target/**"] };
+    const task2 = { id: "task-2", programIds: ["NEXT"], allowedPaths: ["target/**"] };
+
+    await loop.runNext({
+      session: buildSession({ activeTaskId: "task-2" }),
+      inventory: { sourceKind: "cobol", sourceRoot: "/tmp/work", programs: [], copybookFiles: [], risks: [] },
+      architectureDecision: approvedDecision,
+      tasks: [task1, task2],
+    });
+
+    expect(execute).toHaveBeenCalledWith(task2, expect.any(Object));
+  });
+
+  it("throws when the active task cannot be resumed from available tasks", async () => {
+    const execute = vi.fn();
+    const loop = buildMigrationLoop({
+      sessionStore: { load: vi.fn(), save: vi.fn() },
+      source: { id: "cobol", discover: vi.fn() },
+      target: {
+        id: "spring-boot",
+        plan: vi.fn(),
+        execute,
+        verify: vi.fn(),
+      },
+      criteria: [{ id: "build", kind: "SCORE", category: "BUILD", weight: 100, requiredConfidence: 1 }],
+      passThreshold: 90,
+      maxRepairAttempts: 3,
+      maxStagnantIterations: 2,
+      checkpointStore: { save: vi.fn(), loadLatest: vi.fn() },
+      artifacts: { saveJson: vi.fn(), loadJson: vi.fn() },
+      trace: vi.fn(),
+    });
+
+    await expect(loop.runNext({
+      session: buildSession({ activeTaskId: "missing-task" }),
+      inventory: { sourceKind: "cobol", sourceRoot: "/tmp/work", programs: [], copybookFiles: [], risks: [] },
+      architectureDecision: approvedDecision,
+      tasks: [{ id: "task-1", programIds: ["MAIN"], allowedPaths: ["target/**"] }],
+    })).rejects.toThrow("Active task missing-task is not available");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("preserves needs-review stage instead of exhausting stagnant review scores", async () => {
     const evidence = [
       { criterionId: "build", passed: true, score: 70, confidence: 0.5, evidence: ["mvn.log"] },
@@ -251,5 +366,45 @@ describe("migration loop", () => {
       activeTaskId: "task-1",
       completedTaskIds: [],
     });
+  });
+
+  it("checkpoints and traces the completed session before saving it", async () => {
+    const sessionSave = vi.fn();
+    const checkpointSave = vi.fn();
+    const trace = vi.fn();
+    const loop = buildMigrationLoop({
+      sessionStore: { load: vi.fn(), save: sessionSave },
+      source: { id: "cobol", discover: vi.fn() },
+      target: {
+        id: "spring-boot",
+        plan: vi.fn(),
+        execute: vi.fn(),
+        verify: vi.fn(),
+      },
+      criteria: [{ id: "build", kind: "SCORE", category: "BUILD", weight: 100, requiredConfidence: 1 }],
+      passThreshold: 90,
+      maxRepairAttempts: 3,
+      maxStagnantIterations: 2,
+      checkpointStore: { save: checkpointSave, loadLatest: vi.fn() },
+      artifacts: { saveJson: vi.fn(), loadJson: vi.fn() },
+      trace,
+    });
+
+    const result = await loop.runNext({
+      session: buildSession({ completedTaskIds: ["task-1"] }),
+      inventory: { sourceKind: "cobol", sourceRoot: "/tmp/work", programs: [], copybookFiles: [], risks: [] },
+      architectureDecision: approvedDecision,
+      tasks: [{ id: "task-1", programIds: ["MAIN"], allowedPaths: ["target/**"] }],
+    });
+
+    expect(result.session.stage).toBe("COMPLETED");
+    expect(checkpointSave).toHaveBeenCalledWith("s1", "session-completed", result);
+    expect(trace).toHaveBeenCalledWith("session.completed", {
+      sessionId: "s1",
+      completedTaskIds: ["task-1"],
+    });
+    expect(sessionSave).toHaveBeenCalledWith(result.session);
+    expect(checkpointSave.mock.invocationCallOrder[0]).toBeLessThan(sessionSave.mock.invocationCallOrder[0]!);
+    expect(trace.mock.invocationCallOrder[0]).toBeLessThan(sessionSave.mock.invocationCallOrder[0]!);
   });
 });
