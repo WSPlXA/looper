@@ -1,0 +1,1 @@
+       01 COMMON-STATUS PIC 9 VALUE 0.

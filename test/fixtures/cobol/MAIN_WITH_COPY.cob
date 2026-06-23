@@ -1,7 +1,9 @@
        IDENTIFICATION DIVISION.
-       PROGRAM-ID. MAIN-WITH-COPY.
+       PROGRAM-ID. MAIN.
        DATA DIVISION.
-       COPY UTILS.
+       WORKING-STORAGE SECTION.
+       COPY COMMON.
        PROCEDURE DIVISION.
            DISPLAY 'MAIN'.
+           CALL "UTILS".
            STOP RUN.
