@@ -9,4 +9,30 @@ describe("architecture decision gate", () => {
     expect(requireApprovedArchitecture(decision)).toBe(hollowSkinnyProfile.id);
     expect(decision).toMatchObject({ approvedBy: "gaosong", profileId: "hollow-skinny-v1", revision: 1 });
   });
+
+  it("rejects empty approvers", () => {
+    expect(() => approveArchitecture(hollowSkinnyProfile, " ", "2026-06-23T00:00:00.000Z")).toThrow("approvedBy");
+  });
+
+  it("rejects invalid profile ids", () => {
+    expect(() =>
+      approveArchitecture({ ...hollowSkinnyProfile, id: " " }, "gaosong", "2026-06-23T00:00:00.000Z"),
+    ).toThrow("profile.id");
+  });
+
+  it("rejects invalid approval timestamps", () => {
+    expect(() => approveArchitecture(hollowSkinnyProfile, "gaosong", "2026-06-23")).toThrow("approvedAt");
+  });
+
+  it("rejects malformed loaded decisions", () => {
+    expect(() =>
+      requireApprovedArchitecture({
+        id: "",
+        profileId: "",
+        revision: 0,
+        approvedBy: "",
+        approvedAt: "not-a-date",
+      }),
+    ).toThrow("Invalid architecture decision");
+  });
 });
