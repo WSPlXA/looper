@@ -2,7 +2,7 @@ import { requireApprovedArchitecture } from "../architecture/architecture-decisi
 import type { ArchitectureDecision } from "../architecture/architecture-decision.js";
 import { evaluateCriteria } from "../criteria/criteria-engine.js";
 import type { Criterion, CriteriaEvaluation } from "../criteria/criteria.types.js";
-import type { MigrationSession } from "../session/migration-session.js";
+import { migrationSessionSchema, type MigrationSession } from "../session/migration-session.js";
 import type { SessionStore } from "../session/file-session-store.js";
 import type { WorkspaceArtifactStore } from "../session/workspace-artifact-store.js";
 import type { LegacyInventory, SourceAdapter } from "../adapters/source-adapter.js";
@@ -87,12 +87,12 @@ export function buildMigrationLoop(dependencies: MigrationLoopDependencies): {
       const task = selectTask(context.session, tasks);
 
       if (!task) {
-        const completedSession: MigrationSession = {
+        const completedSession = migrationSessionSchema.parse({
           ...context.session,
           stage: "COMPLETED",
           activeTaskId: undefined,
           updatedAt: new Date().toISOString(),
-        };
+        });
         const completedContext: MigrationLoopContext = {
           ...context,
           session: completedSession,
@@ -125,7 +125,7 @@ export function buildMigrationLoop(dependencies: MigrationLoopDependencies): {
       const completedTaskIds = evaluation.decision === "PASSED"
         ? [...context.session.completedTaskIds, task.id]
         : context.session.completedTaskIds;
-      const session: MigrationSession = {
+      const session = migrationSessionSchema.parse({
         ...context.session,
         iteration,
         stage: nextStage({ exhausted, evaluation }),
@@ -134,7 +134,7 @@ export function buildMigrationLoop(dependencies: MigrationLoopDependencies): {
         activeTaskId: evaluation.decision === "PASSED" ? undefined : task.id,
         architectureDecisionId: context.architectureDecision?.id,
         updatedAt: new Date().toISOString(),
-      };
+      });
       const nextContext: MigrationLoopContext = {
         ...context,
         session,

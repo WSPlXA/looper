@@ -187,6 +187,25 @@ describe("migration loop", () => {
     expect(trace).not.toHaveBeenCalled();
   });
 
+  it("validates the advanced session before writing evidence", async () => {
+    const evidence = [
+      { criterionId: "build", passed: true, score: 100, confidence: 1, evidence: ["mvn.log"] },
+    ];
+    const { loop, sessionSave, artifactSave, checkpointSave, trace } = buildLoop(evidence);
+
+    await expect(loop.runNext({
+      session: buildSession({ workspace: "" }),
+      inventory: { sourceKind: "cobol", sourceRoot: "/tmp/work", programs: [], copybookFiles: [], risks: [] },
+      architectureDecision: approvedDecision,
+      tasks: [],
+    })).rejects.toThrow();
+
+    expect(artifactSave).not.toHaveBeenCalled();
+    expect(checkpointSave).not.toHaveBeenCalled();
+    expect(trace).not.toHaveBeenCalled();
+    expect(sessionSave).not.toHaveBeenCalled();
+  });
+
   it("blocks when three failed scores stagnate across the configured window", async () => {
     const evidence = [
       { criterionId: "build", passed: true, score: 70, confidence: 1, evidence: ["mvn.log"] },
@@ -439,5 +458,39 @@ describe("migration loop", () => {
     expect(sessionSave).toHaveBeenCalledWith(result.session);
     expect(checkpointSave.mock.invocationCallOrder[0]).toBeLessThan(sessionSave.mock.invocationCallOrder[0]!);
     expect(trace.mock.invocationCallOrder[0]).toBeLessThan(sessionSave.mock.invocationCallOrder[0]!);
+  });
+
+  it("validates the completed session before checkpointing it", async () => {
+    const sessionSave = vi.fn();
+    const checkpointSave = vi.fn();
+    const trace = vi.fn();
+    const loop = buildMigrationLoop({
+      sessionStore: { load: vi.fn(), save: sessionSave },
+      source: { id: "cobol", discover: vi.fn() },
+      target: {
+        id: "spring-boot",
+        plan: vi.fn(),
+        execute: vi.fn(),
+        verify: vi.fn(),
+      },
+      criteria: [{ id: "build", kind: "SCORE", category: "BUILD", weight: 100, requiredConfidence: 1 }],
+      passThreshold: 90,
+      maxRepairAttempts: 3,
+      maxStagnantIterations: 2,
+      checkpointStore: { save: checkpointSave, loadLatest: vi.fn() },
+      artifacts: { saveJson: vi.fn(), loadJson: vi.fn() },
+      trace,
+    });
+
+    await expect(loop.runNext({
+      session: buildSession({ workspace: "", completedTaskIds: ["task-1"] }),
+      inventory: { sourceKind: "cobol", sourceRoot: "/tmp/work", programs: [], copybookFiles: [], risks: [] },
+      architectureDecision: approvedDecision,
+      tasks: [{ id: "task-1", programIds: ["MAIN"], allowedPaths: ["target/**"] }],
+    })).rejects.toThrow();
+
+    expect(checkpointSave).not.toHaveBeenCalled();
+    expect(trace).not.toHaveBeenCalled();
+    expect(sessionSave).not.toHaveBeenCalled();
   });
 });
