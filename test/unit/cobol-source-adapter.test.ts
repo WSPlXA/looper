@@ -10,6 +10,9 @@ describe("COBOL source adapter", () => {
     expect(inventory.sourceKind).toBe("cobol");
     expect(inventory.programs.map(program => program.programId)).toContain("MAIN");
     expect(inventory.programs.find(program => program.programId === "MAIN")?.callees).toContain("UTILS");
+    const mainWithCopy = inventory.programs.find(program => program.programId === "MAIN-WITH-COPY");
+    expect(mainWithCopy?.callees).toEqual([]);
+    expect(mainWithCopy?.expandedSource).toContain("COMMON-STATUS");
     expect(inventory.copybookFiles.length).toBeGreaterThan(0);
   });
 });
