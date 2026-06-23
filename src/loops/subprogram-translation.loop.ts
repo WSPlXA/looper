@@ -97,6 +97,19 @@ function clampCoverage(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function coversCallTarget(body: string, callee: string): boolean {
+  const target = escapeRegex(callee);
+  const todoCall = new RegExp(`\\bTODO\\s+call\\s+["']?${target}["']?\\s*(?:\\(|\\b)`, "i");
+  if (todoCall.test(body)) return true;
+  return body.split("\n").some(line =>
+    new RegExp(target, "i").test(line) && /(?:\.\s*execute\s*\(|\bexecute\s*\()/i.test(line),
+  );
+}
+
 function measureTranslationCoverage(
   subprogram: SubprogramInfo,
   method: Omit<JavaMethodTranslation, "programId" | "attempts">,
@@ -119,8 +132,7 @@ function measureTranslationCoverage(
     evidence: `linkage params matched: ${method.params.length}/${expectedParams}`,
   });
 
-  const lowerBody = body.toLowerCase();
-  const mentionedCallees = subprogram.callees.filter(callee => lowerBody.includes(callee.toLowerCase()));
+  const mentionedCallees = subprogram.callees.filter(callee => coversCallTarget(body, callee));
   const callCoverage = subprogram.callees.length === 0
     ? 1
     : mentionedCallees.length / subprogram.callees.length;

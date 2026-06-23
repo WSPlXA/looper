@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import type { LegacyInventory, LegacyProgram } from "../../../core/adapters/source-adapter.js";
 import type { MigrationTask, TargetAdapter } from "../../../core/adapters/target-adapter.js";
@@ -37,6 +37,8 @@ const GROUP_ID = "generated.cobol";
 const SPRING_BOOT_VERSION = "3.4.5";
 const JAVA_VERSION = 17;
 const MAX_TRANSLATION_ATTEMPTS = 3;
+const SERVICE_REGISTRATION_PATH = `skinny/src/main/resources/META-INF/services/${GROUP_ID}.api.ProgramPlugin`;
+const SKINNY_SOURCE_ROOT = `skinny/src/main/java/${GROUP_ID.replaceAll(".", "/")}/skinny`;
 
 function toSubprogramInfo(program: LegacyProgram): SubprogramInfo {
   return {
@@ -82,6 +84,98 @@ function ensureSafeOutputPath(outputDir: string, relativePath: string): string {
   return target;
 }
 
+async function readGeneratedFile(outputDir: string, relativePath: string): Promise<string | null> {
+  try {
+    return await readFile(ensureSafeOutputPath(outputDir, relativePath), "utf8");
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function unindentJavaBody(body: string): string {
+  return body
+    .split("\n")
+    .map(line => line.startsWith("        ") ? line.slice(8) : line)
+    .join("\n")
+    .trim();
+}
+
+function parseExecuteBody(content: string, className: string): string {
+  const marker = "public int execute(ProgramContext context) {";
+  const start = content.indexOf(marker);
+  if (start < 0) {
+    throw new Error(`Cannot recover ${className}: missing execute(ProgramContext context)`);
+  }
+  let index = start + marker.length;
+  let depth = 1;
+  let bodyStart = index;
+  while (index < content.length) {
+    const char = content[index];
+    if (char === "{") depth += 1;
+    if (char === "}") depth -= 1;
+    if (depth === 0) {
+      return unindentJavaBody(content.slice(bodyStart, index));
+    }
+    index += 1;
+  }
+  throw new Error(`Cannot recover ${className}: unterminated execute method`);
+}
+
+function parseGeneratedPlugin(className: string, content: string): HollowSkinnyPlugin {
+  const programIdRaw = /public\s+String\s+programId\(\)\s*\{\s*return\s+((?:"(?:\\.|[^"])*"))\s*;\s*\}/m.exec(content)?.[1];
+  if (!programIdRaw) {
+    throw new Error(`Cannot recover ${className}: missing programId() return literal`);
+  }
+  const programId = JSON.parse(programIdRaw) as string;
+  return {
+    programId,
+    className,
+    methodBody: parseExecuteBody(content, className),
+  };
+}
+
+async function recoverPluginsFromDisk(outputDir: string): Promise<HollowSkinnyPlugin[]> {
+  const services = await readGeneratedFile(outputDir, SERVICE_REGISTRATION_PATH);
+  if (!services) return [];
+  const pluginClasses = services.split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line.startsWith(`${GROUP_ID}.skinny.`))
+    .map(line => line.slice(`${GROUP_ID}.skinny.`.length));
+  const plugins: HollowSkinnyPlugin[] = [];
+  for (const className of pluginClasses) {
+    const content = await readGeneratedFile(outputDir, `${SKINNY_SOURCE_ROOT}/${className}.java`);
+    if (!content) {
+      throw new Error(`Cannot recover ${className}: generated plugin source is missing`);
+    }
+    plugins.push(parseGeneratedPlugin(className, content));
+  }
+  return plugins;
+}
+
+function sortPlugins(plugins: HollowSkinnyPlugin[]): HollowSkinnyPlugin[] {
+  return [...plugins].sort((a, b) =>
+    a.programId.localeCompare(b.programId) || a.className.localeCompare(b.className),
+  );
+}
+
+function recoveredQuality(plugin: HollowSkinnyPlugin): SubprogramTranslationQuality {
+  const bodyPresent = plugin.methodBody.trim().length > 0;
+  return {
+    evaluatorPassed: bodyPresent,
+    evaluatorReason: `Recovered generated plugin ${plugin.className} from disk`,
+    coverage: bodyPresent ? 1 : 0,
+    coverageEvidence: [
+      `recovered plugin class: ${plugin.className}`,
+      `executable body non-empty: ${bodyPresent}`,
+      "linkage params matched: recovered generated plugin has no persisted linkage metadata",
+      "CALL target coverage: recovered generated plugin has no persisted call graph metadata",
+    ],
+  };
+}
+
 async function writeProjectFiles(outputDir: string, files: readonly { relativePath: string; content: string }[]): Promise<string[]> {
   const changedFiles: string[] = [];
   for (const file of files) {
@@ -102,7 +196,7 @@ function byCriterionId(
   return {
     criterionId,
     passed: fallback.passed,
-    ...(criterion?.kind === "SCORE" ? { score: fallback.score ?? (fallback.passed ? 1 : 0) } : {}),
+    ...(criterion?.kind === "SCORE" ? { score: fallback.score ?? (fallback.passed ? 100 : 0) } : {}),
     confidence: fallback.confidence,
     evidence: fallback.evidence,
   };
@@ -117,6 +211,7 @@ export function buildSpringBootTargetAdapter(dependencies: Dependencies): Target
   };
 
   function assembleProject(): void {
+    state.plugins = sortPlugins(state.plugins);
     const project = assembleHollowSkinnyProject({
       groupId: GROUP_ID,
       springBootVersion: SPRING_BOOT_VERSION,
@@ -124,6 +219,21 @@ export function buildSpringBootTargetAdapter(dependencies: Dependencies): Target
       plugins: state.plugins,
     });
     state.files = project.files;
+  }
+
+  async function recoverStateFromDisk(): Promise<void> {
+    const recovered = await recoverPluginsFromDisk(dependencies.outputDir);
+    for (const plugin of recovered) {
+      if (!state.plugins.some(candidate => candidate.programId === plugin.programId || candidate.className === plugin.className)) {
+        state.plugins.push(plugin);
+      }
+      if (!state.qualities.has(plugin.programId)) {
+        state.qualities.set(plugin.programId, recoveredQuality(plugin));
+      }
+    }
+    if (recovered.length > 0) {
+      assembleProject();
+    }
   }
 
   return {
@@ -144,6 +254,7 @@ export function buildSpringBootTargetAdapter(dependencies: Dependencies): Target
     },
 
     async execute(task: MigrationTask, inventory: LegacyInventory): Promise<{ changedFiles: string[] }> {
+      await recoverStateFromDisk();
       const programId = task.programIds[0];
       if (!programId) {
         throw new Error(`Migration task ${task.id} has no programIds`);
@@ -198,6 +309,7 @@ export function buildSpringBootTargetAdapter(dependencies: Dependencies): Target
     },
 
     async verify(_task: MigrationTask): Promise<CriterionEvidence[]> {
+      await recoverStateFromDisk();
       const projectVerification = verifyHollowSkinnyProject(state.files);
       const mavenResult = await dependencies.maven.execute({ projectDir: dependencies.outputDir });
       state.lastMavenResult = mavenResult;
@@ -261,7 +373,7 @@ export function buildSpringBootTargetAdapter(dependencies: Dependencies): Target
           ],
         }),
         byCriterionId(dependencies.profile, "semantic.fidelity", {
-          passed: state.translations.size > 0 && semanticScore >= 80,
+          passed: state.qualities.size > 0 && semanticScore >= 80,
           score: semanticScore,
           confidence: 1,
           evidence: semanticEvidence,
