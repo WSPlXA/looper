@@ -5,16 +5,11 @@
   "type": "module",
   "description": "Durable state-graph agent runtime for compiler-driven COBOL-to-Java migration",
   "scripts": {
-    "dev": "tsx src/index.ts",
+    "dev": "tsx src/apps/cli/main.ts",
+    "looper": "tsx src/apps/cli/main.ts",
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "migrate": "tsx src/apps/cli/main.ts migrate-one",
-    "migrate-batch": "tsx src/apps/cli/main.ts migrate-batch",
-    "migrate-program": "tsx src/apps/cli/main.ts migrate-program",
-    "migrate-program-spring": "tsx src/apps/cli/main.ts migrate-program-spring",
-    "migrate-program-meta": "tsx src/apps/cli/main.ts migrate-program-meta",
-    "analyze-variables": "tsx src/apps/cli/main.ts analyze-variables"
+    "test:watch": "vitest"
   },
   "engines": { "node": ">=20" },
   "dependencies": {
