@@ -1,5 +1,5 @@
 import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { LegacyProgram, SourceAdapter } from "../../../core/adapters/source-adapter.js";
 import { analyzeProgramVariables } from "../../../skills/cobol/analyze-variables.skill.js";
 import { expandCopybooks } from "../../../skills/cobol/expand-copybooks.skill.js";
@@ -9,9 +9,15 @@ export function buildCobolSourceAdapter(): SourceAdapter {
   return {
     id: "cobol",
     async discover(sourceRoot) {
-      const entries = await readdir(sourceRoot, { recursive: true });
-      const cobFiles = entries.filter(name => /\.(?:cob|cbl)$/i.test(name)).map(name => join(sourceRoot, name));
-      const copybookFiles = entries.filter(name => /\.cpy$/i.test(name)).map(name => join(sourceRoot, name));
+      const resolvedSourceRoot = resolve(sourceRoot);
+      const entries = (await readdir(resolvedSourceRoot, { recursive: true }))
+        .sort((a, b) => a.localeCompare(b));
+      const cobFiles = entries
+        .filter(name => /\.(?:cob|cbl)$/i.test(name))
+        .map(name => join(resolvedSourceRoot, name));
+      const copybookFiles = entries
+        .filter(name => /\.cpy$/i.test(name))
+        .map(name => join(resolvedSourceRoot, name));
       const programs: LegacyProgram[] = [];
       const risks: string[] = [];
 
@@ -36,7 +42,9 @@ export function buildCobolSourceAdapter(): SourceAdapter {
         });
       }
 
-      return { sourceKind: "cobol", sourceRoot, programs, copybookFiles, risks };
+      programs.sort((a, b) => a.programId.localeCompare(b.programId));
+
+      return { sourceKind: "cobol", sourceRoot: resolvedSourceRoot, programs, copybookFiles, risks };
     },
   };
 }
