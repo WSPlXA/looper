@@ -145,6 +145,11 @@ describe("Spring Boot target adapter", () => {
     );
     expect(services).toContain("generated.cobol.skinny.FormatNamePlugin");
     expect(services).toContain("generated.cobol.skinny.OrderMainPlugin");
+    const recoveredPluginSource = await readFile(
+      join(outputDir, "skinny", "src", "main", "java", "generated", "cobol", "skinny", "FormatNamePlugin.java"),
+      "utf8",
+    );
+    expect(recoveredPluginSource).toContain("LOOPER_TRANSLATION_QUALITY");
 
     const evidence = await rebuiltAdapter.verify(tasks[1]!);
     expect(evidence.find(item => item.criterionId === "architecture.plugin-loads")?.passed).toBe(true);
@@ -152,6 +157,10 @@ describe("Spring Boot target adapter", () => {
       .toContain("FormatNamePlugin");
     expect(evidence.find(item => item.criterionId === "architecture.plugin-loads")?.evidence.join("\n"))
       .toContain("OrderMainPlugin");
+    const semanticEvidence = evidence.find(item => item.criterionId === "semantic.fidelity");
+    expect(semanticEvidence?.score).toBe(100);
+    expect(semanticEvidence?.evidence.join("\n")).toContain("FORMAT-NAME evaluator: passed - Method structure is valid");
+    expect(semanticEvidence?.evidence.join("\n")).not.toContain("Recovered generated plugin");
   });
 
   it("does not count a bare callee name mention as translated CALL coverage", async () => {

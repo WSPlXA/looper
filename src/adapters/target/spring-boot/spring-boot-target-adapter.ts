@@ -39,6 +39,7 @@ const JAVA_VERSION = 17;
 const MAX_TRANSLATION_ATTEMPTS = 3;
 const SERVICE_REGISTRATION_PATH = `skinny/src/main/resources/META-INF/services/${GROUP_ID}.api.ProgramPlugin`;
 const SKINNY_SOURCE_ROOT = `skinny/src/main/java/${GROUP_ID.replaceAll(".", "/")}/skinny`;
+const QUALITY_MARKER = "LOOPER_TRANSLATION_QUALITY";
 
 function toSubprogramInfo(program: LegacyProgram): SubprogramInfo {
   return {
@@ -69,6 +70,13 @@ function normalizePluginBody(method: Omit<JavaMethodTranslation, "programId" | "
   if (!body) return "return 0;";
   if (/^\s*return\b/m.test(body)) return body;
   return `${body}\nreturn 0;`;
+}
+
+function withQualityMetadata(
+  quality: SubprogramTranslationQuality,
+  methodBody: string,
+): string {
+  return `// ${QUALITY_MARKER} ${JSON.stringify(quality)}\n${methodBody}`;
 }
 
 function ensureSafeOutputPath(outputDir: string, relativePath: string): string {
@@ -137,6 +145,27 @@ function parseGeneratedPlugin(className: string, content: string): HollowSkinnyP
   };
 }
 
+function parsePersistedQuality(methodBody: string): SubprogramTranslationQuality | null {
+  const raw = new RegExp(`^\\s*//\\s*${QUALITY_MARKER}\\s+(\\{.*\\})\\s*$`, "m").exec(methodBody)?.[1];
+  if (!raw) return null;
+  const parsed = JSON.parse(raw) as Partial<SubprogramTranslationQuality>;
+  if (
+    typeof parsed.evaluatorPassed !== "boolean"
+    || typeof parsed.evaluatorReason !== "string"
+    || typeof parsed.coverage !== "number"
+    || !Array.isArray(parsed.coverageEvidence)
+    || !parsed.coverageEvidence.every(item => typeof item === "string")
+  ) {
+    throw new Error("Invalid persisted translation quality metadata");
+  }
+  return {
+    evaluatorPassed: parsed.evaluatorPassed,
+    evaluatorReason: parsed.evaluatorReason,
+    coverage: Math.max(0, Math.min(1, parsed.coverage)),
+    coverageEvidence: parsed.coverageEvidence,
+  };
+}
+
 async function recoverPluginsFromDisk(outputDir: string): Promise<HollowSkinnyPlugin[]> {
   const services = await readGeneratedFile(outputDir, SERVICE_REGISTRATION_PATH);
   if (!services) return [];
@@ -161,17 +190,14 @@ function sortPlugins(plugins: HollowSkinnyPlugin[]): HollowSkinnyPlugin[] {
   );
 }
 
-function recoveredQuality(plugin: HollowSkinnyPlugin): SubprogramTranslationQuality {
-  const bodyPresent = plugin.methodBody.trim().length > 0;
+function missingPersistedQuality(plugin: HollowSkinnyPlugin): SubprogramTranslationQuality {
   return {
-    evaluatorPassed: bodyPresent,
-    evaluatorReason: `Recovered generated plugin ${plugin.className} from disk`,
-    coverage: bodyPresent ? 1 : 0,
+    evaluatorPassed: false,
+    evaluatorReason: `Missing persisted translation quality metadata for ${plugin.className}`,
+    coverage: 0,
     coverageEvidence: [
       `recovered plugin class: ${plugin.className}`,
-      `executable body non-empty: ${bodyPresent}`,
-      "linkage params matched: recovered generated plugin has no persisted linkage metadata",
-      "CALL target coverage: recovered generated plugin has no persisted call graph metadata",
+      "missing persisted quality metadata",
     ],
   };
 }
@@ -228,7 +254,7 @@ export function buildSpringBootTargetAdapter(dependencies: Dependencies): Target
         state.plugins.push(plugin);
       }
       if (!state.qualities.has(plugin.programId)) {
-        state.qualities.set(plugin.programId, recoveredQuality(plugin));
+        state.qualities.set(plugin.programId, parsePersistedQuality(plugin.methodBody) ?? missingPersistedQuality(plugin));
       }
     }
     if (recovered.length > 0) {
@@ -294,7 +320,7 @@ export function buildSpringBootTargetAdapter(dependencies: Dependencies): Target
       const plugin: HollowSkinnyPlugin = {
         programId,
         className: pluginClassName(programId),
-        methodBody: normalizePluginBody(translation.method),
+        methodBody: withQualityMetadata(translation.quality, normalizePluginBody(translation.method)),
       };
       const existingIndex = state.plugins.findIndex(candidate => candidate.programId === programId);
       if (existingIndex >= 0) {
