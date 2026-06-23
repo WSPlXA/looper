@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseCliCommand } from "../../src/interfaces/cli/commands.js";
+import { parseMigrationPlanYaml } from "../../src/interfaces/cli/repl.js";
 
 describe("terminal commands", () => {
   it.each([
@@ -9,5 +10,26 @@ describe("terminal commands", () => {
     ["/resume", { name: "resume", args: [] }],
   ])("parses %s", (input, expected) => {
     expect(parseCliCommand(input)).toEqual(expected);
+  });
+
+  it("parses persisted migration plan tasks", () => {
+    expect(parseMigrationPlanYaml([
+      'sessionId: "session-1"',
+      "iteration: 2",
+      "tasks:",
+      '  - id: "migrate-main"',
+      "    programIds:",
+      '      - "MAIN"',
+      "    allowedPaths:",
+      '      - "pom.xml"',
+      '      - "skinny/**"',
+      '    status: "pending"',
+    ].join("\n"))).toEqual([
+      {
+        id: "migrate-main",
+        programIds: ["MAIN"],
+        allowedPaths: ["pom.xml", "skinny/**"],
+      },
+    ]);
   });
 });

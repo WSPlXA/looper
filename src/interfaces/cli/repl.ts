@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import type { LegacyInventory, SourceAdapter } from "../../core/adapters/source-adapter.js";
 import type { MigrationTask } from "../../core/adapters/target-adapter.js";
@@ -14,7 +14,7 @@ import type { TargetArchitectureProfile } from "../../core/architecture/target-p
 import type { Criterion } from "../../core/criteria/criteria.types.js";
 import type { MigrationLoopContext } from "../../core/loop/migration-loop.js";
 import type { SessionStore } from "../../core/session/file-session-store.js";
-import { migrationSessionSchema, type MigrationSession } from "../../core/session/migration-session.js";
+import { migrationSessionSchema, sessionStageSchema, type MigrationSession } from "../../core/session/migration-session.js";
 import type { WorkspaceArtifactStore } from "../../core/session/workspace-artifact-store.js";
 import { parseCliCommand } from "./commands.js";
 import {
@@ -45,8 +45,20 @@ export type ReplDependencies = {
   approvedBy?: string;
 };
 
+type PauseMetadata = {
+  sessionId: string;
+  pausedFromStage: MigrationSession["stage"];
+  pausedAt: string;
+};
+
 function quoteYaml(value: string): string {
   return JSON.stringify(value);
+}
+
+function parseYamlScalar(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.startsWith("\"")) return JSON.parse(trimmed) as string;
+  return trimmed;
 }
 
 function looperTextPath(workspace: string, relativePath: string): string {
@@ -62,8 +74,17 @@ function looperTextPath(workspace: string, relativePath: string): string {
 
 async function saveLooperText(workspace: string, relativePath: string, content: string): Promise<void> {
   const filePath = looperTextPath(workspace, relativePath);
-  await mkdir(resolve(filePath, ".."), { recursive: true });
+  await mkdir(dirname(filePath), { recursive: true });
   await writeFile(filePath, content.endsWith("\n") ? content : `${content}\n`, "utf8");
+}
+
+async function loadLooperText(workspace: string, relativePath: string): Promise<string | undefined> {
+  try {
+    return await readFile(looperTextPath(workspace, relativePath), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
 }
 
 function architectureDecisionYaml(decision: ArchitectureDecision, profile: TargetArchitectureProfile): string {
@@ -111,6 +132,44 @@ function planYaml(session: MigrationSession, tasks: readonly MigrationTask[]): s
   ].join("\n");
 }
 
+export function parseMigrationPlanYaml(raw: string): MigrationTask[] {
+  const tasks: MigrationTask[] = [];
+  let current: MigrationTask | undefined;
+  let list: "programIds" | "allowedPaths" | undefined;
+
+  for (const line of raw.split(/\r?\n/)) {
+    const taskMatch = /^\s*-\s+id:\s*(.+)\s*$/.exec(line);
+    if (taskMatch) {
+      current = { id: parseYamlScalar(taskMatch[1]!), programIds: [], allowedPaths: [] };
+      tasks.push(current);
+      list = undefined;
+      continue;
+    }
+
+    if (!current) continue;
+
+    const listMatch = /^\s*(programIds|allowedPaths):\s*$/.exec(line);
+    if (listMatch) {
+      list = listMatch[1] as "programIds" | "allowedPaths";
+      continue;
+    }
+
+    const emptyListMatch = /^\s*(programIds|allowedPaths):\s*\[\]\s*$/.exec(line);
+    if (emptyListMatch) {
+      current[emptyListMatch[1] as "programIds" | "allowedPaths"] = [];
+      list = undefined;
+      continue;
+    }
+
+    const itemMatch = /^\s*-\s+(.+)\s*$/.exec(line);
+    if (itemMatch && list) {
+      current[list].push(parseYamlScalar(itemMatch[1]!));
+    }
+  }
+
+  return tasks.filter(task => task.id.trim().length > 0);
+}
+
 function parseFlatYaml(raw: string): Record<string, string> {
   const entries: Record<string, string> = {};
   for (const line of raw.split(/\r?\n/)) {
@@ -124,21 +183,17 @@ function parseFlatYaml(raw: string): Record<string, string> {
 }
 
 async function loadArchitectureDecision(workspace: string): Promise<ArchitectureDecision | undefined> {
-  try {
-    const raw = await readFile(looperTextPath(workspace, "decisions/target-architecture.yaml"), "utf8");
-    const flat = parseFlatYaml(raw);
-    if (!flat.id || !flat.profileId || !flat.revision || !flat.approvedBy || !flat.approvedAt) return undefined;
-    return architectureDecisionSchema.parse({
-      id: flat.id,
-      profileId: flat.profileId,
-      revision: Number.parseInt(flat.revision, 10),
-      approvedBy: flat.approvedBy,
-      approvedAt: flat.approvedAt,
-    });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
+  const raw = await loadLooperText(workspace, "decisions/target-architecture.yaml");
+  if (!raw) return undefined;
+  const flat = parseFlatYaml(raw);
+  if (!flat.id || !flat.profileId || !flat.revision || !flat.approvedBy || !flat.approvedAt) return undefined;
+  return architectureDecisionSchema.parse({
+    id: flat.id,
+    profileId: flat.profileId,
+    revision: Number.parseInt(flat.revision, 10),
+    approvedBy: flat.approvedBy,
+    approvedAt: flat.approvedAt,
+  });
 }
 
 function initialStage(session: MigrationSession): MigrationSession["stage"] {
@@ -182,18 +237,68 @@ async function persistPlan(workspace: string, session: MigrationSession, tasks: 
   await saveLooperText(workspace, "plan.yaml", planYaml(session, tasks));
 }
 
+async function loadPersistedPlan(workspace: string): Promise<MigrationTask[] | undefined> {
+  const raw = await loadLooperText(workspace, "plan.yaml");
+  if (!raw) return undefined;
+  const tasks = parseMigrationPlanYaml(raw);
+  return tasks.length > 0 ? tasks : undefined;
+}
+
+async function persistPauseMetadata(workspace: string, metadata: PauseMetadata): Promise<void> {
+  await saveLooperText(workspace, "state/pause.json", JSON.stringify(metadata, null, 2));
+}
+
+async function loadPauseMetadata(workspace: string, sessionId: string): Promise<PauseMetadata | undefined> {
+  const raw = await loadLooperText(workspace, "state/pause.json");
+  if (!raw) return undefined;
+  const parsed = JSON.parse(raw) as Partial<PauseMetadata>;
+  if (parsed.sessionId !== sessionId || typeof parsed.pausedAt !== "string") return undefined;
+  const stage = sessionStageSchema.safeParse(parsed.pausedFromStage);
+  if (!stage.success || stage.data === "PAUSED") return undefined;
+  return { sessionId, pausedFromStage: stage.data, pausedAt: parsed.pausedAt };
+}
+
+function isLegacyInventory(value: unknown): value is LegacyInventory {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<LegacyInventory>;
+  return typeof candidate.sourceKind === "string"
+    && typeof candidate.sourceRoot === "string"
+    && Array.isArray(candidate.programs)
+    && Array.isArray(candidate.copybookFiles)
+    && Array.isArray(candidate.risks);
+}
+
+async function loadDiscoveryInventory(
+  artifacts: WorkspaceArtifactStore,
+  sessionId: string,
+): Promise<LegacyInventory | undefined> {
+  try {
+    const discovery = await artifacts.loadJson("evidence/discovery.json") as { sessionId?: unknown; inventory?: unknown };
+    if (discovery.sessionId !== sessionId || !isLegacyInventory(discovery.inventory)) return undefined;
+    return discovery.inventory;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    if (error instanceof Error && error.message === ".looper directory does not exist") return undefined;
+    throw error;
+  }
+}
+
 async function buildInitialContext(dependencies: ReplDependencies): Promise<{
   context: MigrationLoopContext;
   architectureDecision?: ArchitectureDecision;
 }> {
   const now = (dependencies.clock ?? (() => new Date()))().toISOString();
-  let session = await dependencies.sessionStore.load() ?? createSession(dependencies.workspace, now);
-  const inventory = await dependencies.sourceAdapter.discover(dependencies.workspace);
-  await dependencies.artifacts.saveJson("evidence/discovery.json", {
-    sessionId: session.id,
-    discoveredAt: now,
-    inventory,
-  });
+  const loadedSession = await dependencies.sessionStore.load();
+  let session = loadedSession ?? createSession(dependencies.workspace, now);
+  let inventory = loadedSession ? await loadDiscoveryInventory(dependencies.artifacts, session.id) : undefined;
+  if (!inventory) {
+    inventory = await dependencies.sourceAdapter.discover(dependencies.workspace);
+    await dependencies.artifacts.saveJson("evidence/discovery.json", {
+      sessionId: session.id,
+      discoveredAt: now,
+      inventory,
+    });
+  }
   session = withUpdatedSession(session, {
     stage: session.stage === "DISCOVERY" ? initialStage(session) : session.stage,
     risks: inventory.risks,
@@ -227,6 +332,11 @@ export async function startRepl(dependencies: ReplDependencies): Promise<void> {
   async function ensurePlan(): Promise<MigrationTask[]> {
     if (tasks.length > 0) return tasks;
     if (!architectureDecision) return tasks;
+    const persistedTasks = await loadPersistedPlan(dependencies.workspace);
+    if (persistedTasks) {
+      tasks = persistedTasks;
+      return tasks;
+    }
     tasks = dependencies.planTasks ? await dependencies.planTasks(context.inventory, architectureDecision) : context.tasks;
     await persistPlan(dependencies.workspace, context.session, tasks);
     return tasks;
@@ -298,10 +408,24 @@ export async function startRepl(dependencies: ReplDependencies): Promise<void> {
           if (context.session.approvedCriteriaRevision !== context.session.criteriaRevision) {
             throw new Error("Criteria approval is required before /run");
           }
+          const plannedTasks = await ensurePlan();
+          let runSession = context.session;
+          const requestedTaskId = command.args[0];
+          if (requestedTaskId) {
+            const requestedTask = plannedTasks.find(task => task.id === requestedTaskId);
+            if (!requestedTask) throw new Error(`Unknown migration task: ${requestedTaskId}`);
+            if (context.session.completedTaskIds.includes(requestedTaskId)) {
+              throw new Error(`Migration task is already completed: ${requestedTaskId}`);
+            }
+            runSession = withUpdatedSession(context.session, {
+              activeTaskId: requestedTask.id,
+            }, (dependencies.clock ?? (() => new Date()))().toISOString());
+          }
           context = await dependencies.migrationLoop.runNext({
             ...context,
+            session: runSession,
             architectureDecision,
-            tasks,
+            tasks: plannedTasks,
           });
           tasks = context.tasks;
           await persistPlan(dependencies.workspace, context.session, tasks);
@@ -311,9 +435,15 @@ export async function startRepl(dependencies: ReplDependencies): Promise<void> {
         } else if (command.name === "score") {
           output.write(`${renderEvaluation(context.lastEvaluation)}\n`);
         } else if (command.name === "pause") {
+          const pausedAt = (dependencies.clock ?? (() => new Date()))().toISOString();
+          await persistPauseMetadata(dependencies.workspace, {
+            sessionId: context.session.id,
+            pausedFromStage: context.session.stage,
+            pausedAt,
+          });
           const paused = withUpdatedSession(context.session, {
             stage: "PAUSED",
-          }, (dependencies.clock ?? (() => new Date()))().toISOString());
+          }, pausedAt);
           await saveSession(paused);
           output.write("Session saved as PAUSED.\n");
         } else if (command.name === "resume") {
@@ -322,7 +452,7 @@ export async function startRepl(dependencies: ReplDependencies): Promise<void> {
           architectureDecision = await loadArchitectureDecision(dependencies.workspace) ?? architectureDecision;
           const resumed = loaded.stage === "PAUSED"
             ? withUpdatedSession(loaded, {
-              stage: initialStage(loaded),
+              stage: (await loadPauseMetadata(dependencies.workspace, loaded.id))?.pausedFromStage ?? initialStage(loaded),
             }, (dependencies.clock ?? (() => new Date()))().toISOString())
             : loaded;
           context = {
