@@ -6,6 +6,7 @@ import { buildDependencyGraph } from "../../src/skills/batch/build-dependency-gr
 
 const UTILS = resolve("test/fixtures/cobol/UTILS.cob");
 const MAIN_WITH_COPY = resolve("test/fixtures/cobol/MAIN_WITH_COPY.cob");
+const COMMON = resolve("test/fixtures/cobol/COMMON.cpy");
 const HELLO = resolve("test/fixtures/cobol/HELLO.cob");
 
 describe("buildDependencyGraph", () => {
@@ -16,9 +17,9 @@ describe("buildDependencyGraph", () => {
   });
 
   it("places dependency before the file that COPYs it", async () => {
-    const { order, hasCycle } = await buildDependencyGraph([MAIN_WITH_COPY, UTILS]);
+    const { order, hasCycle } = await buildDependencyGraph([MAIN_WITH_COPY, COMMON]);
     expect(hasCycle).toBe(false);
-    expect(order.indexOf(UTILS)).toBeLessThan(order.indexOf(MAIN_WITH_COPY));
+    expect(order.indexOf(COMMON)).toBeLessThan(order.indexOf(MAIN_WITH_COPY));
   });
 
   it("includes all files even when cycle detected", async () => {
