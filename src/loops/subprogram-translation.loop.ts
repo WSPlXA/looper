@@ -2,7 +2,6 @@ import { buildLoopRunner } from "../core/loop/loop-runner.js";
 import type { ModelClient } from "../core/model/model-client.js";
 import type { SubprogramInfo, JavaMethodTranslation } from "../schemas/assembly-state.schema.js";
 import { buildSubprogramTranslatorAgent } from "../agents/subprogram-translator.agent.js";
-import { buildMethodSignature } from "../agents/program-assembler.agent.js";
 import { countNetBraces } from "../skills/java/count-net-braces.skill.js";
 
 type TranslationState = {
@@ -201,4 +200,9 @@ export async function runSubprogramTranslationLoop(
 
 export function buildKnownSignatures(translatedMethods: JavaMethodTranslation[]): string {
   return translatedMethods.map(m => buildMethodSignature(m)).join("\n");
+}
+
+function buildMethodSignature(m: JavaMethodTranslation): string {
+  const params = m.params.map(p => `${p.type} ${p.name}`).join(", ");
+  return `public ${m.returnType} ${m.methodName}(${params})`;
 }
