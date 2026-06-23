@@ -23,4 +23,7 @@ export type CriteriaEvaluation = {
   hardGatesPassed: boolean;
   decision: "PASSED" | "FAILED" | "NEEDS_REVIEW" | "BLOCKED";
   results: CriterionEvidence[];
+  blockedReasons: string[];
+  missingCriterionIds: string[];
+  duplicateEvidenceCriterionIds: string[];
 };
