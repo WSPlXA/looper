@@ -18,6 +18,8 @@ import { migrationSessionSchema, sessionStageSchema, type MigrationSession } fro
 import type { WorkspaceArtifactStore } from "../../core/session/workspace-artifact-store.js";
 import { parseCliCommand } from "./commands.js";
 import {
+  C_MAGENTA,
+  C_RESET,
   renderArchitectures,
   renderCriteria,
   renderDiff,
@@ -26,7 +28,9 @@ import {
   renderPlan,
   renderRunResult,
   renderSession,
+  renderDependencyTree,
 } from "./render.js";
+import { renderTuiDashboard } from "./tui.js";
 
 export type ReplDependencies = {
   input: Readable;
@@ -339,7 +343,35 @@ export async function startRepl(dependencies: ReplDependencies): Promise<void> {
   const output = dependencies.output;
   const rl = createInterface({ input: dependencies.input, output });
 
-  output.write(`${renderHelp()}\n\n${renderSession(context.session)}\n\nlooper> `);
+  let tuiMessage: string | undefined;
+
+  function redraw(): void {
+    if (process.stdout.isTTY) {
+      output.write("\x1b[H\x1b[J");
+      const dashboard = renderTuiDashboard(
+        context,
+        dependencies.candidateProfiles,
+        dependencies.criteria,
+        tuiMessage
+      );
+      output.write(`${dashboard}\n${C_MAGENTA}❯${C_RESET} `);
+    }
+  }
+
+  function writeOutput(msg: string): void {
+    if (process.stdout.isTTY) {
+      tuiMessage = msg;
+      redraw();
+    } else {
+      output.write(msg);
+    }
+  }
+
+  if (process.stdout.isTTY) {
+    redraw();
+  } else {
+    output.write(`${renderHelp()}\n\n${renderSession(context.session)}\n\n❯ `);
+  }
 
   async function saveSession(session: MigrationSession): Promise<void> {
     context = { ...context, session };
@@ -362,7 +394,12 @@ export async function startRepl(dependencies: ReplDependencies): Promise<void> {
   try {
     for await (const line of rl) {
       if (!line.trim()) {
-        output.write("\nlooper> ");
+        if (process.stdout.isTTY) {
+          tuiMessage = undefined;
+          redraw();
+        } else {
+          output.write("\n❯ ");
+        }
         continue;
       }
 
@@ -371,12 +408,16 @@ export async function startRepl(dependencies: ReplDependencies): Promise<void> {
         if (command.name === "exit") break;
 
         if (command.name === "architectures") {
-          output.write(`${renderArchitectures(dependencies.candidateProfiles)}\n`);
+          writeOutput(`${renderArchitectures(dependencies.candidateProfiles)}\n`);
         } else if (command.name === "status") {
-          output.write(`${renderSession(context.session)}\n`);
+          writeOutput(`${renderSession(context.session)}\n`);
         } else if (command.name === "criteria") {
           await persistCriteria(dependencies.workspace, context.session, dependencies.criteria);
-          output.write(`${renderCriteria(dependencies.criteria, context.session)}\n`);
+          writeOutput(`${renderCriteria(dependencies.criteria, context.session)}\n`);
+        } else if (command.name === "help") {
+          writeOutput(`${renderHelp()}\n`);
+        } else if (command.name === "tree") {
+          writeOutput(`${renderDependencyTree(context.inventory)}\n`);
         } else if (command.name === "approve") {
           const [kind, value] = command.args;
           if (kind === "architecture") {
@@ -394,7 +435,7 @@ export async function startRepl(dependencies: ReplDependencies): Promise<void> {
             context = { ...context, architectureDecision };
             await saveLooperText(dependencies.workspace, "decisions/target-architecture.yaml", architectureDecisionYaml(architectureDecision, profile));
             await saveSession(nextSession);
-            output.write(`Approved architecture ${profile.id}. Review /criteria next.\n`);
+            writeOutput(`Approved architecture ${profile.id}. Review /criteria next.\n`);
           } else if (kind === "criteria") {
             const revision = Number.parseInt(value ?? "", 10);
             if (!Number.isInteger(revision)) throw new Error("Criteria approval requires a numeric revision");
@@ -410,13 +451,13 @@ export async function startRepl(dependencies: ReplDependencies): Promise<void> {
             }, (dependencies.clock ?? (() => new Date()))().toISOString());
             await persistCriteria(dependencies.workspace, nextSession, dependencies.criteria);
             await saveSession(nextSession);
-            output.write(`Approved criteria revision ${revision}. Use /plan or /run.\n`);
+            writeOutput(`Approved criteria revision ${revision}. Use /plan or /run.\n`);
           } else {
             throw new Error("Usage: /approve architecture <profile-id> or /approve criteria <revision>");
           }
         } else if (command.name === "plan") {
           const plannedTasks = await ensurePlan();
-          output.write(`${renderPlan(plannedTasks, context.session)}\n`);
+          writeOutput(`${renderPlan(plannedTasks, context.session)}\n`);
         } else if (command.name === "run") {
           if (context.session.stage === "PAUSED") throw new Error("Session is paused. Use /resume before /run.");
           if (!architectureDecision || !context.session.architectureDecisionId) {
@@ -446,17 +487,17 @@ export async function startRepl(dependencies: ReplDependencies): Promise<void> {
           });
           tasks = context.tasks;
           await persistPlan(dependencies.workspace, context.session, tasks);
-          output.write(`${renderRunResult(context)}\n`);
+          writeOutput(`${renderRunResult(context)}\n`);
         } else if (command.name === "diff") {
-          output.write(`${renderDiff(context)}\n`);
+          writeOutput(`${renderDiff(context)}\n`);
         } else if (command.name === "score") {
-          output.write(`${renderEvaluation(context.lastEvaluation)}\n`);
+          writeOutput(`${renderEvaluation(context.lastEvaluation)}\n`);
         } else if (command.name === "pause") {
           const pausedAt = (dependencies.clock ?? (() => new Date()))().toISOString();
           const transition = buildPauseTransition(context.session, pausedAt);
           if (transition.metadata) await persistPauseMetadata(dependencies.workspace, transition.metadata);
           await saveSession(transition.session);
-          output.write(transition.alreadyPaused ? "Session is already PAUSED.\n" : "Session saved as PAUSED.\n");
+          writeOutput(transition.alreadyPaused ? "Session is already PAUSED.\n" : "Session saved as PAUSED.\n");
         } else if (command.name === "resume") {
           const loaded = await dependencies.sessionStore.load();
           if (!loaded) throw new Error("No saved session found");
@@ -472,12 +513,14 @@ export async function startRepl(dependencies: ReplDependencies): Promise<void> {
             ...(architectureDecision ? { architectureDecision } : {}),
           };
           await dependencies.sessionStore.save(resumed);
-          output.write(`${renderSession(resumed)}\n`);
+          writeOutput(`${renderSession(resumed)}\n`);
         }
       } catch (error) {
-        output.write(`Error: ${error instanceof Error ? error.message : String(error)}\n`);
+        writeOutput(`Error: ${error instanceof Error ? error.message : String(error)}\n`);
       }
-      output.write("\nlooper> ");
+      if (!process.stdout.isTTY) {
+        output.write("\n❯ ");
+      }
     }
   } finally {
     rl.close();

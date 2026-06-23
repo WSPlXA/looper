@@ -1,9 +1,9 @@
-export type CliCommandName = "plan" | "architectures" | "approve" | "criteria" | "run" | "diff" | "score" | "status" | "pause" | "resume" | "exit";
+export type CliCommandName = "plan" | "architectures" | "approve" | "criteria" | "run" | "diff" | "score" | "status" | "pause" | "resume" | "exit" | "help" | "tree";
 export type CliCommand = { name: CliCommandName; args: string[] };
 
 const names = new Set<CliCommandName>([
   "plan", "architectures", "approve", "criteria", "run", "diff",
-  "score", "status", "pause", "resume", "exit",
+  "score", "status", "pause", "resume", "exit", "help", "tree"
 ]);
 
 export function parseCliCommand(input: string): CliCommand {
@@ -13,3 +13,4 @@ export function parseCliCommand(input: string): CliCommand {
   if (!names.has(name)) throw new Error(`Unknown command: ${rawName}`);
   return { name, args };
 }
+

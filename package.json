@@ -11,7 +11,9 @@
     "test": "vitest run",
     "test:watch": "vitest"
   },
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "dotenv": "^16.4.7",
     "execa": "^9.5.2",
