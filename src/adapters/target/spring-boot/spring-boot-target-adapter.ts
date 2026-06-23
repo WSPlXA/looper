@@ -111,25 +111,86 @@ function unindentJavaBody(body: string): string {
     .trim();
 }
 
+function findMatchingJavaBrace(content: string, openingBraceIndex: number, className: string): number {
+  let depth = 1;
+  let state: "CODE" | "DOUBLE_STRING" | "SINGLE_STRING" | "LINE_COMMENT" | "BLOCK_COMMENT" = "CODE";
+  let escaped = false;
+
+  for (let index = openingBraceIndex + 1; index < content.length; index += 1) {
+    const char = content[index]!;
+    const next = content[index + 1];
+
+    if (state === "LINE_COMMENT") {
+      if (char === "\n" || char === "\r") state = "CODE";
+      continue;
+    }
+
+    if (state === "BLOCK_COMMENT") {
+      if (char === "*" && next === "/") {
+        state = "CODE";
+        index += 1;
+      }
+      continue;
+    }
+
+    if (state === "DOUBLE_STRING" || state === "SINGLE_STRING") {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if ((state === "DOUBLE_STRING" && char === "\"") || (state === "SINGLE_STRING" && char === "'")) {
+        state = "CODE";
+      }
+      continue;
+    }
+
+    if (char === "/" && next === "/") {
+      state = "LINE_COMMENT";
+      index += 1;
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      state = "BLOCK_COMMENT";
+      index += 1;
+      continue;
+    }
+    if (char === "\"") {
+      state = "DOUBLE_STRING";
+      escaped = false;
+      continue;
+    }
+    if (char === "'") {
+      state = "SINGLE_STRING";
+      escaped = false;
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+
+  throw new Error(`Cannot recover ${className}: unterminated execute method`);
+}
+
 function parseExecuteBody(content: string, className: string): string {
   const marker = "public int execute(ProgramContext context) {";
   const start = content.indexOf(marker);
   if (start < 0) {
     throw new Error(`Cannot recover ${className}: missing execute(ProgramContext context)`);
   }
-  let index = start + marker.length;
-  let depth = 1;
-  let bodyStart = index;
-  while (index < content.length) {
-    const char = content[index];
-    if (char === "{") depth += 1;
-    if (char === "}") depth -= 1;
-    if (depth === 0) {
-      return unindentJavaBody(content.slice(bodyStart, index));
-    }
-    index += 1;
-  }
-  throw new Error(`Cannot recover ${className}: unterminated execute method`);
+  const openingBraceIndex = start + marker.length - 1;
+  const bodyStart = openingBraceIndex + 1;
+  const closingBraceIndex = findMatchingJavaBrace(content, openingBraceIndex, className);
+  return unindentJavaBody(content.slice(bodyStart, closingBraceIndex));
 }
 
 function parseGeneratedPlugin(className: string, content: string): HollowSkinnyPlugin {

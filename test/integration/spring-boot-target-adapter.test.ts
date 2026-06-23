@@ -204,4 +204,37 @@ describe("Spring Boot target adapter", () => {
     expect(semanticEvidence?.passed).toBe(false);
     expect(semanticEvidence?.evidence.join("\n")).toContain("CALL target coverage: 0/1");
   });
+
+  it("recovers generated plugin bodies without counting braces inside Java strings", async () => {
+    const outputDir = await mkdtemp(join(tmpdir(), "spring-boot-target-brace-recover-"));
+    const inventory = buildInventory();
+    const architectureDecision = approveArchitecture(hollowSkinnyProfile, "integration-test", "2026-06-23T00:00:00.000Z");
+    const maven = {
+      execute: vi.fn().mockResolvedValue({ success: true, exitCode: 0, stdout: "", stderr: "" }),
+    };
+    const firstAdapter = buildSpringBootTargetAdapter({
+      model: buildFakeModel({ "FORMAT-NAME": "context.put(\"brace\", \"{\");\nreturn 0;" }),
+      outputDir,
+      profile: hollowSkinnyProfile,
+      maven,
+    });
+    const tasks = await firstAdapter.plan(inventory, architectureDecision);
+    await firstAdapter.execute(tasks[0]!, inventory);
+
+    const rebuiltAdapter = buildSpringBootTargetAdapter({
+      model: buildFakeModel({ "ORDER-MAIN": "// TODO call FORMAT-NAME()\ncontext.put(\"ORDER-MAIN.translated\", Boolean.TRUE);" }),
+      outputDir,
+      profile: hollowSkinnyProfile,
+      maven,
+    });
+    await rebuiltAdapter.execute(tasks[1]!, inventory);
+
+    const formatNameSource = await readFile(
+      join(outputDir, "skinny", "src", "main", "java", "generated", "cobol", "skinny", "FormatNamePlugin.java"),
+      "utf8",
+    );
+    expect(formatNameSource).toContain("context.put(\"brace\", \"{\");");
+    expect(formatNameSource).not.toMatch(/^ {12}\}$/m);
+    expect((await rebuiltAdapter.verify(tasks[1]!)).find(item => item.criterionId === "architecture.plugin-loads")?.passed).toBe(true);
+  });
 });
