@@ -1,68 +1,79 @@
+import { join, resolve } from "node:path";
+import { buildSpringBootTargetAdapter } from "../../adapters/target/spring-boot/spring-boot-target-adapter.js";
 import { loadConfig } from "../../config/env.js";
-import { migrateOneCommand } from "./commands/migrate-one.command.js";
-import { migrateBatchCommand } from "./commands/migrate-batch.command.js";
-import { migrateProgramCommand } from "./commands/migrate-program.command.js";
-import { migrateProgramMetaCommand } from "./commands/migrate-program-meta.command.js";
-import { migrateProgramSpringCommand } from "./commands/migrate-program-spring.command.js";
-import { analyzeVariablesCommand } from "./commands/analyze-variables.command.js";
+import { buildCobolSourceAdapter } from "../../adapters/source/cobol/cobol-source-adapter.js";
+import { buildFileCheckpointStore } from "../../core/checkpoint/file-checkpoint.store.js";
+import { buildMigrationLoop, type MigrationLoopContext } from "../../core/loop/migration-loop.js";
+import { buildFileSessionStore, type SessionStore } from "../../core/session/file-session-store.js";
+import { buildWorkspaceArtifactStore } from "../../core/session/workspace-artifact-store.js";
+import { buildTraceLogger } from "../../core/trace/trace-logger.js";
+import { startRepl } from "../../interfaces/cli/repl.js";
+import { DeepSeekClient } from "../../models/deepseek/deepseek-client.js";
+import { hollowSkinnyProfile } from "../../profiles/hollow-skinny/hollow-skinny.profile.js";
+import { buildMavenTestTool } from "../../tools/maven.tool.js";
 
+function buildSessionTraceLogger(
+  tracePath: string,
+  sessionStore: Pick<SessionStore, "load">,
+): (type: string, data?: unknown) => Promise<void> {
+  const loggers = new Map<string, ReturnType<typeof buildTraceLogger>>();
 
-const [command, ...args] = process.argv.slice(2);
+  return async (type, data) => {
+    const session = await sessionStore.load();
+    const runId = session?.id ?? "unknown-session";
+    let logger = loggers.get(runId);
+    if (!logger) {
+      logger = buildTraceLogger(tracePath, runId);
+      loggers.set(runId, logger);
+    }
+    await logger(type, data);
+  };
+}
 
 try {
   const config = loadConfig();
-  if (command === "migrate-one") {
-    if (args.length < 3) {
-      console.error("Usage: npm run migrate -- <source.cob> <output-dir> <ClassName> [max-attempts]");
-      process.exitCode = 2;
-    } else {
-      process.exitCode = await migrateOneCommand(args, config);
-    }
-  } else if (command === "migrate-batch") {
-    if (args.length < 2) {
-      console.error("Usage: npm run migrate-batch -- <source-dir> <output-dir> [max-attempts-per-file]");
-      process.exitCode = 2;
-    } else {
-      process.exitCode = await migrateBatchCommand(args, config);
-    }
-  } else if (command === "migrate-program") {
-    if (args.length < 3) {
-      console.error("Usage: npm run migrate-program -- <source-dir> <output-dir> <ClassName> [translation-attempts] [repair-attempts]");
-      process.exitCode = 2;
-    } else {
-      process.exitCode = await migrateProgramCommand(args, config);
-    }
-  } else if (command === "migrate-program-meta") {
-    if (args.length < 3) {
-      console.error("Usage: npm run migrate-program-meta -- <source-dir> <output-dir> <ClassName> [max-rounds] [translation-attempts] [repair-attempts] [concurrency]");
-      process.exitCode = 2;
-    } else {
-      process.exitCode = await migrateProgramMetaCommand(args, config);
-    }
-  } else if (command === "migrate-program-spring") {
-    if (args.length < 3) {
-      console.error("Usage: npm run migrate-program-spring -- <source-dir> <output-dir> <ClassName> [package] [translation-attempts] [repair-attempts] [concurrency] [spring-boot-version]");
-      process.exitCode = 2;
-    } else {
-      process.exitCode = await migrateProgramSpringCommand(args, config);
-    }
-  } else if (command === "analyze-variables") {
-    if (args.length < 2) {
-      console.error("Usage: npm run analyze-variables -- <source-dir> <output-markdown-file> [output-json-file]");
-      process.exitCode = 2;
-    } else {
-      process.exitCode = await analyzeVariablesCommand(args, config);
-    }
-  } else {
-    console.error("Commands:");
-    console.error("  migrate-one          <source.cob> <output-dir> <ClassName> [max-attempts]");
-    console.error("  migrate-batch        <source-dir> <output-dir> [max-attempts-per-file]");
-    console.error("  migrate-program      <source-dir> <output-dir> <ClassName> [translation-attempts] [repair-attempts]");
-    console.error("  migrate-program-meta <source-dir> <output-dir> <ClassName> [max-rounds] [translation-attempts] [repair-attempts] [concurrency]");
-    console.error("  migrate-program-spring <source-dir> <output-dir> <ClassName> [package] [translation-attempts] [repair-attempts] [concurrency] [spring-boot-version]");
-    console.error("  analyze-variables    <source-dir> <output-markdown-file> [output-json-file]");
-    process.exitCode = 2;
-  }
+  const workspace = process.cwd();
+  const looperRoot = resolve(workspace, ".looper");
+  const sourceAdapter = buildCobolSourceAdapter();
+  const sessionStore = buildFileSessionStore(workspace);
+  const artifacts = buildWorkspaceArtifactStore(workspace);
+  const tracePath = join(looperRoot, "traces", "session.jsonl");
+  const targetAdapter = buildSpringBootTargetAdapter({
+    model: new DeepSeekClient({
+      apiKey: config.DEEPSEEK_API_KEY,
+      baseUrl: config.DEEPSEEK_BASE_URL,
+      model: config.DEEPSEEK_MODEL,
+      timeoutMs: config.MODEL_TIMEOUT_MS,
+    }),
+    outputDir: join(looperRoot, "generated"),
+    profile: hollowSkinnyProfile,
+    maven: buildMavenTestTool(),
+  });
+  const migrationLoop = buildMigrationLoop({
+    sessionStore,
+    source: sourceAdapter,
+    target: targetAdapter,
+    criteria: hollowSkinnyProfile.criteria,
+    passThreshold: 90,
+    maxRepairAttempts: 3,
+    maxStagnantIterations: 2,
+    checkpointStore: buildFileCheckpointStore<MigrationLoopContext>(looperRoot),
+    artifacts,
+    trace: buildSessionTraceLogger(tracePath, sessionStore),
+  });
+
+  await startRepl({
+    input: process.stdin,
+    output: process.stdout,
+    workspace,
+    sessionStore,
+    migrationLoop,
+    sourceAdapter,
+    candidateProfiles: [hollowSkinnyProfile],
+    artifacts,
+    criteria: hollowSkinnyProfile.criteria,
+    planTasks: (inventory, decision) => targetAdapter.plan(inventory, decision),
+  });
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
