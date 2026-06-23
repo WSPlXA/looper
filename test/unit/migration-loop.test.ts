@@ -91,6 +91,39 @@ describe("migration loop", () => {
     })).rejects.toThrow("Architecture approval is required");
   });
 
+  it("blocks before planning or execution when criteria approval is missing", async () => {
+    const plan = vi.fn().mockResolvedValue([{ id: "task-1", programIds: ["MAIN"], allowedPaths: ["target/**"] }]);
+    const execute = vi.fn().mockResolvedValue({ changedFiles: ["target/Main.java"] });
+    const loop = buildMigrationLoop({
+      sessionStore: { load: vi.fn(), save: vi.fn() },
+      source: { id: "cobol", discover: vi.fn() },
+      target: {
+        id: "spring-boot",
+        plan,
+        execute,
+        verify: vi.fn().mockResolvedValue([
+          { criterionId: "build", passed: true, score: 100, confidence: 1, evidence: ["mvn.log"] },
+        ]),
+      },
+      criteria: [{ id: "build", kind: "SCORE", category: "BUILD", weight: 100, requiredConfidence: 1 }],
+      passThreshold: 90,
+      maxRepairAttempts: 3,
+      maxStagnantIterations: 2,
+      checkpointStore: { save: vi.fn(), loadLatest: vi.fn() },
+      artifacts: { saveJson: vi.fn(), loadJson: vi.fn() },
+      trace: vi.fn(),
+    });
+
+    await expect(loop.runNext({
+      session: buildSession({ approvedCriteriaRevision: undefined }),
+      inventory: { sourceKind: "cobol", sourceRoot: "/tmp/work", programs: [], copybookFiles: [], risks: [] },
+      architectureDecision: approvedDecision,
+      tasks: [],
+    })).rejects.toThrow("Criteria approval is required before execution");
+    expect(plan).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("persists evidence and completes a passing task after one approved iteration", async () => {
     const evidence = [
       { criterionId: "build", passed: true, score: 100, confidence: 1, evidence: ["mvn.log"] },
@@ -125,11 +158,9 @@ describe("migration loop", () => {
     }));
     expect(checkpointSave).toHaveBeenCalledWith("s1", "iteration-1", result);
     expect(trace).toHaveBeenCalledWith("iteration.completed", {
-      sessionId: "s1",
       iteration: 1,
       taskId: "task-1",
-      decision: "PASSED",
-      score: 100,
+      evaluation: result.lastEvaluation,
     });
   });
 
@@ -162,6 +193,63 @@ describe("migration loop", () => {
         { iteration: 2, score: 70, decision: "FAILED" },
         { iteration: 3, score: 70, decision: "FAILED" },
       ],
+    });
+  });
+
+  it("uses score history length rather than session iteration for repair attempts", async () => {
+    const evidence = [
+      { criterionId: "build", passed: true, score: 70, confidence: 1, evidence: ["mvn.log"] },
+    ];
+    const { loop, task } = buildLoop(evidence, { maxRepairAttempts: 3 });
+
+    const result = await loop.runNext({
+      session: buildSession({
+        iteration: 100,
+        scoreHistory: [
+          { iteration: 100, score: 60, decision: "FAILED" },
+        ],
+      }),
+      inventory: { sourceKind: "cobol", sourceRoot: "/tmp/work", programs: [], copybookFiles: [], risks: [] },
+      architectureDecision: approvedDecision,
+      tasks: [task],
+    });
+
+    expect(result.session).toMatchObject({
+      stage: "RUNNING",
+      iteration: 101,
+      activeTaskId: "task-1",
+      scoreHistory: [
+        { iteration: 100, score: 60, decision: "FAILED" },
+        { iteration: 101, score: 70, decision: "FAILED" },
+      ],
+    });
+  });
+
+  it("preserves needs-review stage instead of exhausting stagnant review scores", async () => {
+    const evidence = [
+      { criterionId: "build", passed: true, score: 70, confidence: 0.5, evidence: ["mvn.log"] },
+    ];
+    const { loop, task } = buildLoop(evidence, { maxRepairAttempts: 10 });
+
+    const result = await loop.runNext({
+      session: buildSession({
+        iteration: 2,
+        scoreHistory: [
+          { iteration: 1, score: 70, decision: "FAILED" },
+          { iteration: 2, score: 70, decision: "FAILED" },
+        ],
+      }),
+      inventory: { sourceKind: "cobol", sourceRoot: "/tmp/work", programs: [], copybookFiles: [], risks: [] },
+      architectureDecision: approvedDecision,
+      tasks: [task],
+    });
+
+    expect(result.lastEvaluation).toMatchObject({ decision: "NEEDS_REVIEW", score: 70 });
+    expect(result.session).toMatchObject({
+      stage: "NEEDS_REVIEW",
+      iteration: 3,
+      activeTaskId: "task-1",
+      completedTaskIds: [],
     });
   });
 });

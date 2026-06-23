@@ -87,10 +87,11 @@ export function buildMigrationLoop(dependencies: MigrationLoopDependencies): {
         ...context.session.scoreHistory,
         { iteration, score: evaluation.score, decision: evaluation.decision },
       ];
-      const exhausted = evaluation.decision !== "PASSED" && shouldStopRepair({
-        attempt: iteration,
+      const scores = scoreHistory.map(score => score.score);
+      const exhausted = evaluation.decision === "FAILED" && shouldStopRepair({
+        attempt: scores.length,
         maxAttempts: dependencies.maxRepairAttempts,
-        scores: scoreHistory.map(score => score.score),
+        scores,
         maxStagnantIterations: dependencies.maxStagnantIterations,
       });
       const completedTaskIds = evaluation.decision === "PASSED"
@@ -127,11 +128,9 @@ export function buildMigrationLoop(dependencies: MigrationLoopDependencies): {
       });
       await dependencies.checkpointStore.save(session.id, iterationId, nextContext);
       await dependencies.trace("iteration.completed", {
-        sessionId: session.id,
         iteration,
         taskId: task.id,
-        decision: evaluation.decision,
-        score: evaluation.score,
+        evaluation,
       });
 
       return nextContext;
