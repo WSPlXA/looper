@@ -103,10 +103,13 @@ function escapeRegex(value: string): string {
 
 function coversCallTarget(body: string, callee: string): boolean {
   const target = escapeRegex(callee);
-  const todoCall = new RegExp(`\\bTODO\\s+call\\s+["']?${target}["']?\\s*(?:\\(|\\b)`, "i");
+  const programIdBefore = "(?<![A-Za-z0-9_$#@-])";
+  const programIdAfter = "(?![A-Za-z0-9_$#@-])";
+  const exactTarget = `${programIdBefore}${target}${programIdAfter}`;
+  const todoCall = new RegExp(`\\bTODO\\s+call\\s+["']?${exactTarget}["']?\\s*(?:\\(|$)`, "i");
   if (todoCall.test(body)) return true;
   return body.split("\n").some(line =>
-    new RegExp(target, "i").test(line) && /(?:\.\s*execute\s*\(|\bexecute\s*\()/i.test(line),
+    new RegExp(exactTarget, "i").test(line) && /(?:\.\s*execute\s*\(|\bexecute\s*\()/i.test(line),
   );
 }
 

@@ -183,4 +183,25 @@ describe("Spring Boot target adapter", () => {
     expect(semanticEvidence?.passed).toBe(false);
     expect(semanticEvidence?.evidence.join("\n")).toContain("CALL target coverage: 0/1");
   });
+
+  it("does not count TODO call targets that only share a COBOL program-id prefix", async () => {
+    const outputDir = await mkdtemp(join(tmpdir(), "spring-boot-target-call-prefix-"));
+    const inventory = buildInventory();
+    const architectureDecision = approveArchitecture(hollowSkinnyProfile, "integration-test", "2026-06-23T00:00:00.000Z");
+    const adapter = buildSpringBootTargetAdapter({
+      model: buildFakeModel({ "ORDER-MAIN": "// TODO call FORMAT-NAME-EXTRA()\ncontext.put(\"ORDER-MAIN.translated\", Boolean.TRUE);" }),
+      outputDir,
+      profile: hollowSkinnyProfile,
+      maven: { execute: vi.fn().mockResolvedValue({ success: true, exitCode: 0, stdout: "", stderr: "" }) },
+    });
+    const tasks = await adapter.plan(inventory, architectureDecision);
+    await adapter.execute(tasks[1]!, inventory);
+
+    const evidence = await adapter.verify(tasks[1]!);
+    const semanticEvidence = evidence.find(item => item.criterionId === "semantic.fidelity");
+
+    expect(semanticEvidence?.score).toBeLessThan(80);
+    expect(semanticEvidence?.passed).toBe(false);
+    expect(semanticEvidence?.evidence.join("\n")).toContain("CALL target coverage: 0/1");
+  });
 });
